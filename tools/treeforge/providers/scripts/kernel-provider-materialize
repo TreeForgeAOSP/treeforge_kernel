@@ -1,0 +1,455 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+DEFAULT_RELEASE = "android-15.0.0_r0.94"
+
+DEFAULT_CACHE_ROOT = (
+    Path.home()
+    / ".cache"
+    / "treeforge"
+    / "providers"
+    / "kernel"
+)
+
+
+class MaterializeError(RuntimeError):
+    pass
+
+
+def run(
+    args: list[str],
+    *,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        args,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    if check and result.returncode != 0:
+        raise MaterializeError(
+            f"command failed ({result.returncode}): "
+            f"{' '.join(args)}\n{result.stdout}"
+        )
+
+    return result
+
+
+def load_manifest(release: str) -> dict:
+    path = (
+        ROOT
+        / "manifests"
+        / "kernel"
+        / release
+        / "google-providers.json"
+    )
+
+    if not path.is_file():
+        raise MaterializeError(
+            f"provider manifest missing: {path}"
+        )
+
+    data = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+    if data.get("schema") != 1:
+        raise MaterializeError(
+            f"unsupported schema: {data.get('schema')}"
+        )
+
+    if data.get("platform_release") != release:
+        raise MaterializeError(
+            "manifest release identity mismatch"
+        )
+
+    providers = data.get("providers")
+
+    if not isinstance(providers, dict) or not providers:
+        raise MaterializeError(
+            "manifest contains no providers"
+        )
+
+    return data
+
+
+def cache_path(
+    cache_root: Path,
+    release: str,
+    name: str,
+) -> Path:
+    return (
+        cache_root.expanduser().resolve()
+        / release
+        / name
+    )
+
+
+def git_head(path: Path) -> str | None:
+    result = run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "rev-parse",
+            "HEAD",
+        ],
+        check=False,
+    )
+
+    if result.returncode != 0:
+        return None
+
+    return result.stdout.strip()
+
+
+def git_dirty(path: Path) -> bool:
+    result = run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "status",
+            "--porcelain",
+        ],
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise MaterializeError(
+            f"unable to inspect provider: {path}"
+        )
+
+    return bool(result.stdout.strip())
+
+
+def verify_provider(
+    *,
+    cache_root: Path,
+    release: str,
+    name: str,
+    provider: dict,
+) -> Path:
+    source = cache_path(
+        cache_root,
+        release,
+        name,
+    )
+
+    if not source.is_dir():
+        raise MaterializeError(
+            f"{name}: provider cache missing: {source}"
+        )
+
+    expected = provider["revision"]
+    actual = git_head(source)
+
+    if actual != expected:
+        raise MaterializeError(
+            f"{name}: revision mismatch: "
+            f"expected={expected} actual={actual}"
+        )
+
+    if git_dirty(source):
+        raise MaterializeError(
+            f"{name}: provider cache is dirty: {source}"
+        )
+
+    attrs = source / ".gitattributes"
+
+    if attrs.is_file():
+        text = attrs.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+
+        if "filter=lfs" in text:
+            raise MaterializeError(
+                f"{name}: Git LFS declaration found"
+            )
+
+    return source
+
+
+def target_state(
+    *,
+    source: Path,
+    target: Path,
+) -> tuple[str, str]:
+    if target.is_symlink():
+        raw = os.readlink(target)
+
+        resolved = (
+            target.parent
+            / raw
+        ).resolve()
+
+        if resolved == source.resolve():
+            return "READY", raw
+
+        return (
+            "COLLISION",
+            f"symlink -> {raw}",
+        )
+
+    if target.exists():
+        if target.is_dir():
+            source_head = git_head(source)
+            target_head = git_head(target)
+
+            if (
+                source_head is not None
+                and target_head == source_head
+            ):
+                if git_dirty(target):
+                    return (
+                        "COLLISION",
+                        (
+                            "existing canonical checkout is dirty: "
+                            f"{target}"
+                        ),
+                    )
+
+                return (
+                    "READY",
+                    (
+                        "existing canonical checkout "
+                        f"revision={target_head}"
+                    ),
+                )
+
+            if target_head is not None:
+                return (
+                    "COLLISION",
+                    (
+                        "existing canonical checkout revision mismatch: "
+                        f"expected={source_head} actual={target_head}"
+                    ),
+                )
+
+        return (
+            "COLLISION",
+            "existing non-provider path",
+        )
+
+    return "MISSING", str(target)
+
+
+def status(
+    *,
+    workspace: Path,
+    cache_root: Path,
+    release: str,
+    providers: dict,
+) -> int:
+    print("TreeForge Kernel Provider Materialization")
+    print()
+    print(f"Release:   {release}")
+    print(f"Workspace: {workspace}")
+    print(f"Cache:     {cache_root.expanduser().resolve()}")
+    print()
+
+    ready = 0
+
+    for name, provider in providers.items():
+        source = verify_provider(
+            cache_root=cache_root,
+            release=release,
+            name=name,
+            provider=provider,
+        )
+
+        target = (
+            workspace
+            / provider["workspace_path"]
+        )
+
+        state, detail = target_state(
+            source=source,
+            target=target,
+        )
+
+        if state == "READY":
+            ready += 1
+
+        print(
+            f"{name:24s} "
+            f"{state:10s} "
+            f"{provider['workspace_path']}"
+        )
+
+        if state == "COLLISION":
+            print(f"  {detail}")
+
+    print()
+    print(
+        f"Materialized: {ready}/{len(providers)}"
+    )
+
+    return 0
+
+
+def materialize(
+    *,
+    workspace: Path,
+    cache_root: Path,
+    release: str,
+    providers: dict,
+) -> int:
+    workspace.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    print("TreeForge Kernel Provider Materialization")
+    print()
+    print(f"Release:   {release}")
+    print(f"Workspace: {workspace}")
+    print()
+
+    for name, provider in providers.items():
+        source = verify_provider(
+            cache_root=cache_root,
+            release=release,
+            name=name,
+            provider=provider,
+        )
+
+        target = (
+            workspace
+            / provider["workspace_path"]
+        )
+
+        state, detail = target_state(
+            source=source,
+            target=target,
+        )
+
+        if state == "READY":
+            print(
+                f"{name:24s} READY"
+            )
+            continue
+
+        if state == "COLLISION":
+            raise MaterializeError(
+                f"{name}: refusing to overwrite "
+                f"{target}: {detail}"
+            )
+
+        target.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        target.symlink_to(
+            source,
+            target_is_directory=True,
+        )
+
+        print(
+            f"{name:24s} LINKED"
+        )
+        print(
+            f"  {target}"
+        )
+        print(
+            f"    -> {source}"
+        )
+
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Expose cached TreeForge kernel providers "
+            "at Google's expected workspace paths."
+        )
+    )
+
+    parser.add_argument(
+        "--release",
+        default=DEFAULT_RELEASE,
+    )
+
+    parser.add_argument(
+        "--cache-root",
+        type=Path,
+        default=DEFAULT_CACHE_ROOT,
+    )
+
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        required=True,
+    )
+
+    sub = parser.add_subparsers(
+        dest="command",
+        required=True,
+    )
+
+    sub.add_parser("status")
+    sub.add_parser("materialize")
+
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+
+    try:
+        data = load_manifest(args.release)
+        providers = data["providers"]
+
+        workspace = (
+            args.workspace
+            .expanduser()
+            .resolve()
+        )
+
+        if args.command == "status":
+            return status(
+                workspace=workspace,
+                cache_root=args.cache_root,
+                release=args.release,
+                providers=providers,
+            )
+
+        if args.command == "materialize":
+            return materialize(
+                workspace=workspace,
+                cache_root=args.cache_root,
+                release=args.release,
+                providers=providers,
+            )
+
+        raise MaterializeError(
+            f"unsupported command: {args.command}"
+        )
+
+    except MaterializeError as exc:
+        print(
+            f"kernel-provider-materialize: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

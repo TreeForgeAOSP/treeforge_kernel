@@ -1,0 +1,43 @@
+{
+  "architecture": "x86_64",
+  "executables": [
+    {
+      "capabilities": [
+        "treeforge-adb-host"
+      ],
+      "name": "adb",
+      "path": "bin/adb",
+      "sha256": "b8762103831406816bedc3b8d9c32146be2ea9a87b9e468d38546640de5c500b"
+    }
+  ],
+  "legal_files": [
+    {
+      "path": "legal/LEGAL-SOURCES.json",
+      "sha256": "35797dcfc72aaa6edda86a04ea8462c7818d7dbf267eac73e2e048a4b784de34"
+    },
+    {
+      "path": "legal/upstream/packages/modules/adb/MODULE_LICENSE_APACHE2",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "legal/upstream/packages/modules/adb/NOTICE",
+      "sha256": "cf14d0774dd1e5f5ae0416edbc5c0de706c474e9402e3fe367e9103cd13891f7"
+    }
+  ],
+  "name": "treeforge-adb",
+  "platform": "linux",
+  "provenance_files": [],
+  "provider_sources": [
+    {
+      "module": "adb",
+      "platform": "android",
+      "platform_release": "android-15.0.0_r36",
+      "project": "platform/packages/modules/adb",
+      "revision": "a877adddefdf011bfb5d4045919c6df3d3727ed3",
+      "source_path": "packages/modules/adb"
+    }
+  ],
+  "release": "android-15.0.0_r36-linux-x86_64",
+  "runtime_files": [],
+  "schema": 2
+}

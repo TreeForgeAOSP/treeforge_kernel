@@ -1,0 +1,1738 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+ROOT = Path("/home/skelitonlord/development/treeforge_kernel")
+TREEFORGE = Path("/home/skelitonlord/development/treeforge")
+AOSP = TREEFORGE / "aosp"
+
+DIST = ROOT / "out/tangorpro/dist"
+AOSP_PRODUCT = AOSP / "out/target/product/tangorpro"
+
+TREEFORGE_KEYS = (
+    TREEFORGE
+    / ".treeforge-private/keys/avb/android-15.0.0_r36/tangorpro"
+)
+
+AOSP_AVB_KEYS = AOSP / "external/avb/test/data"
+
+DEVICE = "tangorpro"
+
+KERNEL_PROVIDER_RELEASE = "android-15.0.0_r0.94"
+
+KERNEL_PROVIDER_ROOT = (
+    ROOT
+    / "tools"
+    / "treeforge"
+    / "providers"
+)
+
+KERNEL_PROVIDER_CACHE = (
+    Path.home()
+    / ".cache"
+    / "treeforge"
+    / "providers"
+    / "kernel"
+)
+
+TREEFORGE_TOOLS_CONTRACT = (
+    KERNEL_PROVIDER_CACHE
+    / "treeforge-tools.json"
+)
+
+
+class KernelCtlError(RuntimeError):
+    pass
+
+
+def run(args, *, capture=False, check=True):
+    print("+", " ".join(str(x) for x in args))
+
+    result = subprocess.run(
+        [str(x) for x in args],
+        text=True,
+        capture_output=capture,
+    )
+
+    if check and result.returncode != 0:
+        if capture:
+            if result.stdout:
+                print(result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
+
+        raise KernelCtlError(
+            f"command failed ({result.returncode}): "
+            + " ".join(str(x) for x in args)
+        )
+
+    return result
+
+
+def output(args):
+    result = run(args, capture=True)
+
+    if result.stderr:
+        # avbtool normally uses stdout, fastboot frequently uses stderr.
+        return result.stdout + result.stderr
+
+    return result.stdout
+
+
+def need_file(path: Path):
+    if not path.is_file():
+        raise KernelCtlError(f"required file missing: {path}")
+
+
+def need_command(name: str):
+    path = shutil.which(name)
+
+    if not path:
+        raise KernelCtlError(f"required command not found: {name}")
+
+    return Path(path)
+
+
+def avbtool_path():
+    candidate = AOSP / "out/host/linux-x86/bin/avbtool"
+
+    if candidate.is_file():
+        return candidate
+
+    candidate = (
+        ROOT
+        / "prebuilts/kernel-build-tools/linux-x86/bin/avbtool"
+    )
+
+    if candidate.is_file():
+        return candidate
+
+    raise KernelCtlError("avbtool not found")
+
+
+def avb_info(image: Path):
+    avbtool = avbtool_path()
+    return output([avbtool, "info_image", "--image", image])
+
+
+def field(info: str, name: str):
+    match = re.search(
+        rf"^{re.escape(name)}:\s*(.+?)\s*$",
+        info,
+        re.MULTILINE,
+    )
+
+    if not match:
+        raise KernelCtlError(f"AVB field not found: {name}")
+
+    return match.group(1)
+
+
+def integer_field(info: str, name: str):
+    value = field(info, name)
+    match = re.search(r"\d+", value)
+
+    if not match:
+        raise KernelCtlError(f"integer AVB field not found: {name}")
+
+    return int(match.group(0))
+
+
+def properties(info: str, prefix: str | None = None):
+    found = []
+
+    for line in info.splitlines():
+        line = line.strip()
+
+        if not line.startswith("Prop: "):
+            continue
+
+        body = line[len("Prop: "):]
+
+        if " -> " not in body:
+            continue
+
+        key, value = body.split(" -> ", 1)
+        value = value.strip()
+
+        if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+            value = value[1:-1]
+
+        if prefix is None or key.startswith(prefix):
+            found.append((key, value))
+
+    return found
+
+
+def append_props(command, props):
+    for key, value in props:
+        command.extend(["--prop", f"{key}:{value}"])
+
+
+def public_key_sha1(key: Path):
+    avbtool = avbtool_path()
+    temp = ROOT / "out/tangorpro/.kernelctl-pubkey.bin"
+    temp.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        run([
+            avbtool,
+            "extract_public_key",
+            "--key", key,
+            "--output", temp,
+        ])
+
+        return hashlib.sha1(temp.read_bytes()).hexdigest()
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def provider_keys(provider: str):
+    if provider == "aosp":
+        rsa2048 = AOSP_AVB_KEYS / "testkey_rsa2048.pem"
+
+        keys = {
+            "boot": rsa2048,
+            "init_boot": rsa2048,
+            "vbmeta_system": rsa2048,
+            "vbmeta_vendor": rsa2048,
+            "vbmeta": AOSP_AVB_KEYS / "testkey_rsa4096.pem",
+        }
+
+    elif provider == "treeforge":
+        keys = {
+            "boot": TREEFORGE_KEYS / "boot.pem",
+            "init_boot": TREEFORGE_KEYS / "init_boot.pem",
+            "vbmeta": TREEFORGE_KEYS / "vbmeta.pem",
+            "vbmeta_system": TREEFORGE_KEYS / "vbmeta_system.pem",
+            "vbmeta_vendor": TREEFORGE_KEYS / "vbmeta_vendor.pem",
+        }
+
+    else:
+        raise KernelCtlError(f"unknown signing provider: {provider}")
+
+    for path in keys.values():
+        need_file(path)
+
+    return keys
+
+
+def preflight():
+    need_command("adb")
+    need_command("fastboot")
+
+    need_file(avbtool_path())
+
+    for name in (
+        "boot.img",
+        "dtbo.img",
+        "vendor_kernel_boot.img",
+        "vendor_dlkm.img",
+        "system_dlkm.img",
+    ):
+        need_file(DIST / name)
+
+    for name in (
+        "boot.img",
+        "init_boot.img",
+        "dtbo.img",
+        "vendor_boot.img",
+        "vendor_kernel_boot.img",
+        "vendor_dlkm.img",
+        "system_dlkm.img",
+        "vbmeta.img",
+        "vbmeta_system.img",
+        "vbmeta_vendor.img",
+        "system.img",
+        "system_ext.img",
+        "product.img",
+        "pvmfw.img",
+    ):
+        need_file(AOSP_PRODUCT / name)
+
+
+def copy_clean(source: Path, target: Path):
+    if target.exists():
+        target.unlink()
+
+    shutil.copy2(source, target)
+
+
+def add_hash_footer(
+    image: Path,
+    *,
+    partition_name: str,
+    partition_size: int,
+    key: Path | None = None,
+    algorithm: str | None = None,
+    rollback_index: int | None = None,
+    props=(),
+):
+    command = [
+        avbtool_path(),
+        "add_hash_footer",
+        "--image", image,
+        "--partition_name", partition_name,
+        "--partition_size", str(partition_size),
+    ]
+
+    if key is not None:
+        command.extend(["--key", key])
+
+    if algorithm is not None:
+        command.extend(["--algorithm", algorithm])
+
+    if rollback_index is not None:
+        command.extend(["--rollback_index", str(rollback_index)])
+
+    append_props(command, props)
+
+    run(command)
+
+
+def package(provider: str):
+    preflight()
+    keys = provider_keys(provider)
+
+    stage = ROOT / f"out/tangorpro/deploy/{provider}"
+    stage.mkdir(parents=True, exist_ok=True)
+
+    print()
+    print(f"Signing provider: {provider}")
+    print(f"Output:           {stage}")
+    print()
+
+    # ---------------------------------------------------------
+    # boot
+    # ---------------------------------------------------------
+    stock_boot = AOSP_PRODUCT / "boot.img"
+    stock_boot_info = avb_info(stock_boot)
+
+    boot = stage / "boot.img"
+    copy_clean(DIST / "boot.img", boot)
+
+    # Standalone kernel build already adds an unsigned footer.
+    run([
+        avbtool_path(),
+        "erase_footer",
+        "--image", boot,
+    ])
+
+    add_hash_footer(
+        boot,
+        partition_name="boot",
+        partition_size=stock_boot.stat().st_size,
+        key=keys["boot"],
+        algorithm="SHA256_RSA2048",
+        rollback_index=integer_field(
+            stock_boot_info,
+            "Rollback Index",
+        ),
+        props=properties(stock_boot_info),
+    )
+
+    # ---------------------------------------------------------
+    # init_boot: preserve AOSP payload, change selected signer.
+    # ---------------------------------------------------------
+    stock_init_boot = AOSP_PRODUCT / "init_boot.img"
+    stock_init_info = avb_info(stock_init_boot)
+
+    init_boot = stage / "init_boot.img"
+    copy_clean(stock_init_boot, init_boot)
+
+    run([
+        avbtool_path(),
+        "erase_footer",
+        "--image", init_boot,
+    ])
+
+    add_hash_footer(
+        init_boot,
+        partition_name="init_boot",
+        partition_size=stock_init_boot.stat().st_size,
+        key=keys["init_boot"],
+        algorithm="SHA256_RSA2048",
+        rollback_index=integer_field(
+            stock_init_info,
+            "Rollback Index",
+        ),
+        props=properties(stock_init_info),
+    )
+
+    # ---------------------------------------------------------
+    # dtbo
+    # ---------------------------------------------------------
+    stock_dtbo = AOSP_PRODUCT / "dtbo.img"
+    stock_dtbo_info = avb_info(stock_dtbo)
+
+    dtbo = stage / "dtbo.img"
+    copy_clean(DIST / "dtbo.img", dtbo)
+
+    add_hash_footer(
+        dtbo,
+        partition_name="dtbo",
+        partition_size=stock_dtbo.stat().st_size,
+        props=properties(stock_dtbo_info),
+    )
+
+    # ---------------------------------------------------------
+    # vendor_boot is unchanged AOSP payload, but carry it in the
+    # deployment set because root vbmeta authenticates it.
+    # ---------------------------------------------------------
+    vendor_boot = stage / "vendor_boot.img"
+    copy_clean(AOSP_PRODUCT / "vendor_boot.img", vendor_boot)
+
+    # ---------------------------------------------------------
+    # vendor_kernel_boot
+    # ---------------------------------------------------------
+    stock_vkb = AOSP_PRODUCT / "vendor_kernel_boot.img"
+    stock_vkb_info = avb_info(stock_vkb)
+
+    vendor_kernel_boot = stage / "vendor_kernel_boot.img"
+    copy_clean(
+        DIST / "vendor_kernel_boot.img",
+        vendor_kernel_boot,
+    )
+
+    add_hash_footer(
+        vendor_kernel_boot,
+        partition_name="vendor_kernel_boot",
+        partition_size=stock_vkb.stat().st_size,
+        props=properties(stock_vkb_info),
+    )
+
+    # ---------------------------------------------------------
+    # DLKM images are already produced with valid hashtrees.
+    # ---------------------------------------------------------
+    vendor_dlkm = stage / "vendor_dlkm.img"
+    system_dlkm = stage / "system_dlkm.img"
+
+    copy_clean(DIST / "vendor_dlkm.img", vendor_dlkm)
+    copy_clean(DIST / "system_dlkm.img", system_dlkm)
+
+    # ---------------------------------------------------------
+    # vbmeta_system
+    # ---------------------------------------------------------
+    stock_vbmeta_system = AOSP_PRODUCT / "vbmeta_system.img"
+    stock_vbs_info = avb_info(stock_vbmeta_system)
+
+    vbmeta_system = stage / "vbmeta_system.img"
+
+    command = [
+        avbtool_path(),
+        "make_vbmeta_image",
+        "--output", vbmeta_system,
+        "--key", keys["vbmeta_system"],
+        "--algorithm", "SHA256_RSA2048",
+        "--rollback_index",
+        str(integer_field(stock_vbs_info, "Rollback Index")),
+        "--padding_size",
+        str(stock_vbmeta_system.stat().st_size),
+
+        "--include_descriptors_from_image",
+        AOSP_PRODUCT / "system.img",
+
+        "--include_descriptors_from_image",
+        system_dlkm,
+
+        "--include_descriptors_from_image",
+        AOSP_PRODUCT / "system_ext.img",
+
+        "--include_descriptors_from_image",
+        AOSP_PRODUCT / "product.img",
+
+        "--include_descriptors_from_image",
+        AOSP_PRODUCT / "pvmfw.img",
+    ]
+
+    append_props(
+        command,
+        properties(
+            stock_vbs_info,
+            "com.android.build.system_dlkm.",
+        ),
+    )
+
+    run(command)
+
+    # ---------------------------------------------------------
+    # vbmeta_vendor: preserve all AOSP descriptors but sign the
+    # node with the chosen provider's vbmeta_vendor key.
+    # ---------------------------------------------------------
+    stock_vbmeta_vendor = AOSP_PRODUCT / "vbmeta_vendor.img"
+    stock_vbv_info = avb_info(stock_vbmeta_vendor)
+
+    vbmeta_vendor = stage / "vbmeta_vendor.img"
+
+    run([
+        avbtool_path(),
+        "make_vbmeta_image",
+        "--output", vbmeta_vendor,
+        "--key", keys["vbmeta_vendor"],
+        "--algorithm", "SHA256_RSA2048",
+        "--rollback_index",
+        str(integer_field(stock_vbv_info, "Rollback Index")),
+        "--padding_size",
+        str(stock_vbmeta_vendor.stat().st_size),
+        "--include_descriptors_from_image",
+        stock_vbmeta_vendor,
+    ])
+
+    # ---------------------------------------------------------
+    # root vbmeta
+    # ---------------------------------------------------------
+    pubdir = stage / ".pubkeys"
+    pubdir.mkdir(exist_ok=True)
+
+    pubs = {}
+
+    for name in (
+        "boot",
+        "init_boot",
+        "vbmeta_system",
+        "vbmeta_vendor",
+    ):
+        pub = pubdir / f"{name}.avbpubkey"
+
+        run([
+            avbtool_path(),
+            "extract_public_key",
+            "--key", keys[name],
+            "--output", pub,
+        ])
+
+        pubs[name] = pub
+
+    stock_vbmeta = AOSP_PRODUCT / "vbmeta.img"
+    stock_vbmeta_info = avb_info(stock_vbmeta)
+
+    vbmeta = stage / "vbmeta.img"
+
+    command = [
+        avbtool_path(),
+        "make_vbmeta_image",
+        "--output", vbmeta,
+        "--key", keys["vbmeta"],
+        "--algorithm", "SHA256_RSA4096",
+        "--rollback_index",
+        str(integer_field(stock_vbmeta_info, "Rollback Index")),
+        "--padding_size",
+        str(stock_vbmeta.stat().st_size),
+
+        "--chain_partition",
+        f"boot:2:{pubs['boot']}",
+
+        "--chain_partition",
+        f"init_boot:4:{pubs['init_boot']}",
+
+        "--chain_partition",
+        f"vbmeta_system:1:{pubs['vbmeta_system']}",
+
+        "--chain_partition",
+        f"vbmeta_vendor:3:{pubs['vbmeta_vendor']}",
+
+        "--include_descriptors_from_image",
+        dtbo,
+
+        "--include_descriptors_from_image",
+        vendor_boot,
+
+        "--include_descriptors_from_image",
+        vendor_kernel_boot,
+
+        "--include_descriptors_from_image",
+        vendor_dlkm,
+    ]
+
+    append_props(
+        command,
+        properties(
+            stock_vbmeta_info,
+            "com.android.build.vendor_dlkm.",
+        ),
+    )
+
+    run(command)
+
+    # ---------------------------------------------------------
+    # Verification
+    # ---------------------------------------------------------
+    expected_hashes = {
+        "boot": public_key_sha1(keys["boot"]),
+        "init_boot": public_key_sha1(keys["init_boot"]),
+        "vbmeta": public_key_sha1(keys["vbmeta"]),
+        "vbmeta_system": public_key_sha1(keys["vbmeta_system"]),
+        "vbmeta_vendor": public_key_sha1(keys["vbmeta_vendor"]),
+    }
+
+    verify_images = {
+        "boot": boot,
+        "init_boot": init_boot,
+        "vbmeta": vbmeta,
+        "vbmeta_system": vbmeta_system,
+        "vbmeta_vendor": vbmeta_vendor,
+    }
+
+    print()
+    print("Signing verification")
+    print("--------------------")
+
+    for name, image in verify_images.items():
+        info = avb_info(image)
+        actual = field(info, "Public key (sha1)")
+        expected = expected_hashes[name]
+
+        if actual != expected:
+            raise KernelCtlError(
+                f"{name}: signing key mismatch: "
+                f"expected {expected}, got {actual}"
+            )
+
+        print(f"PASS  {name:<15} {actual}")
+
+    expected = [
+        "boot.img",
+        "init_boot.img",
+        "dtbo.img",
+        "vendor_boot.img",
+        "vendor_kernel_boot.img",
+        "vendor_dlkm.img",
+        "system_dlkm.img",
+        "vbmeta.img",
+        "vbmeta_system.img",
+        "vbmeta_vendor.img",
+    ]
+
+    for name in expected:
+        need_file(stage / name)
+
+    print()
+    print("Package complete:")
+    print(stage)
+
+    return stage
+
+
+def provider_script(name: str) -> Path:
+    path = KERNEL_PROVIDER_ROOT / "scripts" / name
+
+    if not path.is_file():
+        raise KernelCtlError(
+            f"TreeForge provider script missing: {path}"
+        )
+
+    return path
+
+
+def provider_manifest() -> dict:
+    path = (
+        KERNEL_PROVIDER_ROOT
+        / "manifests"
+        / "kernel"
+        / KERNEL_PROVIDER_RELEASE
+        / "google-providers.json"
+    )
+
+    need_file(path)
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise KernelCtlError(
+            f"unable to read kernel provider manifest: {path}: {error}"
+        ) from error
+
+    if data.get("schema") != 1:
+        raise KernelCtlError(
+            f"unsupported kernel provider schema: {data.get('schema')}"
+        )
+
+    if data.get("platform_release") != KERNEL_PROVIDER_RELEASE:
+        raise KernelCtlError(
+            "kernel provider release identity mismatch"
+        )
+
+    providers = data.get("providers")
+
+    if not isinstance(providers, dict) or not providers:
+        raise KernelCtlError(
+            "kernel provider manifest contains no providers"
+        )
+
+    return data
+
+
+def git_head(path: Path):
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "rev-parse",
+            "HEAD",
+        ],
+        text=True,
+        capture_output=True,
+    )
+
+    if result.returncode != 0:
+        return None
+
+    return result.stdout.strip()
+
+
+def git_dirty(path: Path) -> bool:
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "status",
+            "--porcelain",
+        ],
+        text=True,
+        capture_output=True,
+    )
+
+    if result.returncode != 0:
+        raise KernelCtlError(
+            f"unable to inspect provider checkout: {path}"
+        )
+
+    return bool(result.stdout.strip())
+
+
+def verify_workspace_provider_plan(
+    *,
+    name: str,
+    provider: dict,
+) -> tuple[str, Path]:
+    target = ROOT / provider["workspace_path"]
+    expected = provider["revision"]
+
+    if not target.exists():
+        return "MATERIALIZE", target
+
+    if not target.is_dir():
+        raise KernelCtlError(
+            f"{name}: provider path is not a directory: {target}"
+        )
+
+    actual = git_head(target)
+
+    if actual is None:
+        raise KernelCtlError(
+            f"{name}: existing provider path is not a Git checkout: "
+            f"{target}"
+        )
+
+    if actual != expected:
+        raise KernelCtlError(
+            f"{name}: provider revision mismatch: "
+            f"expected={expected} actual={actual}"
+        )
+
+    if git_dirty(target):
+        raise KernelCtlError(
+            f"{name}: provider checkout is dirty: {target}"
+        )
+
+    return "READY", target
+
+
+def load_treeforge_tools_contract() -> dict:
+    need_file(TREEFORGE_TOOLS_CONTRACT)
+
+    try:
+        data = json.loads(
+            TREEFORGE_TOOLS_CONTRACT.read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise KernelCtlError(
+            "unable to read TreeForge host-tool contract: "
+            f"{TREEFORGE_TOOLS_CONTRACT}: {error}"
+        ) from error
+
+    if data.get("schema") != 1:
+        raise KernelCtlError(
+            "unsupported TreeForge host-tool contract schema: "
+            f"{data.get('schema')}"
+        )
+
+    tools = data.get("tools")
+
+    if not isinstance(tools, dict):
+        raise KernelCtlError(
+            "TreeForge host-tool contract contains no tools"
+        )
+
+    required = (
+        "mkbootimg",
+        "unpack_bootimg",
+        "avbtool",
+        "adb",
+        "fastboot",
+    )
+
+    for name in required:
+        record = tools.get(name)
+
+        if not isinstance(record, dict):
+            raise KernelCtlError(
+                f"TreeForge host-tool contract missing: {name}"
+            )
+
+        tool_path = Path(record.get("path", ""))
+
+        if not tool_path.is_file():
+            raise KernelCtlError(
+                f"TreeForge host tool missing: {name}: {tool_path}"
+            )
+
+    return data
+
+
+def build_environment_plan(contract: dict) -> dict:
+    java_home = (
+        ROOT
+        / "prebuilts"
+        / "jdk"
+        / "jdk11"
+        / "linux-x86"
+    )
+
+    java = java_home / "bin" / "java"
+
+    need_file(java)
+
+    bazel = (
+        ROOT
+        / "prebuilts"
+        / "bazel"
+        / "linux-x86_64"
+        / "bazel"
+    )
+
+    need_file(bazel)
+
+    tangorpro_build = (
+        ROOT
+        / "private"
+        / "devices"
+        / "google"
+        / "tangorpro"
+        / "build_tangorpro.sh"
+    )
+
+    need_file(tangorpro_build)
+
+    tool_dirs = []
+
+    for name in (
+        "mkbootimg",
+        "unpack_bootimg",
+        "avbtool",
+        "adb",
+        "fastboot",
+    ):
+        parent = str(Path(contract["tools"][name]["path"]).parent)
+
+        if parent not in tool_dirs:
+            tool_dirs.append(parent)
+
+    path_prefix = [
+        str(java_home / "bin"),
+        *tool_dirs,
+    ]
+
+    library_dirs = []
+
+    runtime = contract.get("runtime", {})
+
+    for value in runtime.get("library_dirs", []):
+        directory = Path(value)
+
+        if not directory.is_dir():
+            raise KernelCtlError(
+                f"TreeForge runtime library directory missing: "
+                f"{directory}"
+            )
+
+        library_dirs.append(str(directory))
+
+    return {
+        "java_home": java_home,
+        "java": java,
+        "bazel": bazel,
+        "build_script": tangorpro_build,
+        "path_prefix": path_prefix,
+        "library_dirs": library_dirs,
+    }
+
+
+def kernel_bazel_command(raw_dir: Path):
+    bazel = ROOT / "tools" / "bazel"
+
+    need_file(bazel)
+
+    return [
+        bazel,
+        "run",
+        "--kernel_package=@//aosp",
+        "--config=stamp",
+        "--config=tangorpro",
+        "--config=no_download_gki",
+        "--config=no_download_gki_fips140",
+        "--config=no_internet",
+        "//private/devices/google/tangorpro:gs201_tangorpro_dist",
+        "--",
+        f"--dist_dir={raw_dir}",
+    ]
+
+
+def build_child_environment(contract: dict) -> tuple[dict, dict]:
+    plan = build_environment_plan(contract)
+
+    env = os.environ.copy()
+
+    env["JAVA_HOME"] = str(plan["java_home"])
+
+    path_parts = [
+        *plan["path_prefix"],
+    ]
+
+    existing_path = env.get("PATH", "")
+
+    if existing_path:
+        path_parts.append(existing_path)
+
+    env["PATH"] = os.pathsep.join(path_parts)
+
+    library_parts = [
+        *plan["library_dirs"],
+    ]
+
+    existing_libraries = env.get("LD_LIBRARY_PATH", "")
+
+    if existing_libraries:
+        library_parts.append(existing_libraries)
+
+    if library_parts:
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(
+            library_parts
+        )
+
+    return env, plan
+
+
+def prepare_kernel_build_providers() -> tuple[dict, dict]:
+    cache = provider_script("kernel-provider-cache")
+    materialize = provider_script("kernel-provider-materialize")
+    treeforge_tools = provider_script("kernel-treeforge-tools")
+
+    print()
+    print("Preparing Google kernel providers")
+    print("---------------------------------")
+
+    run([
+        cache,
+        "--release",
+        KERNEL_PROVIDER_RELEASE,
+        "fetch",
+        "all",
+    ])
+
+    run([
+        cache,
+        "--release",
+        KERNEL_PROVIDER_RELEASE,
+        "verify",
+        "all",
+    ])
+
+    print()
+    print("Preparing canonical workspace providers")
+    print("---------------------------------------")
+
+    run([
+        materialize,
+        "--release",
+        KERNEL_PROVIDER_RELEASE,
+        "--workspace",
+        ROOT,
+        "materialize",
+    ])
+
+    print()
+    print("Preparing TreeForge host tools")
+    print("------------------------------")
+
+    run([
+        treeforge_tools,
+        "prepare",
+    ])
+
+    run([
+        treeforge_tools,
+        "verify",
+    ])
+
+    contract = load_treeforge_tools_contract()
+    env, environment = build_child_environment(contract)
+
+    return env, environment
+
+
+def provider_workspace_states():
+    manifest = provider_manifest()
+    states = []
+
+    for name, provider in manifest["providers"].items():
+        state, target = verify_workspace_provider_plan(
+            name=name,
+            provider=provider,
+        )
+
+        states.append(
+            (
+                name,
+                state,
+                provider["workspace_path"],
+                target,
+            )
+        )
+
+    return states
+
+
+def kernel_build_plan():
+    print("TreeForge Kernel Build Provider Plan")
+    print("===================================")
+    print()
+    print(f"Workspace:        {ROOT}")
+    print(f"Provider release: {KERNEL_PROVIDER_RELEASE}")
+    print(f"Provider root:    {KERNEL_PROVIDER_ROOT}")
+    print()
+
+    cache = provider_script("kernel-provider-cache")
+    treeforge_tools = provider_script("kernel-treeforge-tools")
+
+    print("Google provider cache")
+    print("---------------------")
+
+    run([
+        cache,
+        "--release",
+        KERNEL_PROVIDER_RELEASE,
+        "verify",
+        "all",
+    ])
+
+    print()
+    print("Google workspace providers")
+    print("--------------------------")
+
+    materialize_count = 0
+
+    for name, state, workspace_path, target in (
+        provider_workspace_states()
+    ):
+        if state == "MATERIALIZE":
+            materialize_count += 1
+
+        print(
+            f"{name:24s} "
+            f"{state:11s} "
+            f"{workspace_path}"
+        )
+
+        if state == "MATERIALIZE":
+            print(
+                "  would materialize from verified cache: "
+                f"{target}"
+            )
+
+    print()
+    print(
+        "Workspace action: "
+        + (
+            f"materialize {materialize_count} missing provider(s)"
+            if materialize_count
+            else "none; canonical providers already valid"
+        )
+    )
+
+    print()
+    print("TreeForge host tools")
+    print("--------------------")
+
+    run([
+        treeforge_tools,
+        "verify",
+    ])
+
+    contract = load_treeforge_tools_contract()
+
+    print()
+    print("Resolved host-tool contract")
+    print("---------------------------")
+
+    for name in (
+        "mkbootimg",
+        "unpack_bootimg",
+        "avbtool",
+        "adb",
+        "fastboot",
+    ):
+        record = contract["tools"][name]
+
+        print(
+            f"{name:18s} "
+            f"{record['path']}"
+        )
+
+    _, environment = build_child_environment(contract)
+
+    print()
+    print("Build environment")
+    print("-----------------")
+    print(f"JAVA_HOME={environment['java_home']}")
+    print(f"JAVA={environment['java']}")
+    print(f"BAZEL={environment['bazel']}")
+    print(f"BUILD_SCRIPT={environment['build_script']}")
+
+    print("PATH_PREPEND=")
+
+    for value in environment["path_prefix"]:
+        print(f"  {value}")
+
+    print("LD_LIBRARY_PATH_PREPEND=")
+
+    if environment["library_dirs"]:
+        for value in environment["library_dirs"]:
+            print(f"  {value}")
+    else:
+        print("  <none>")
+
+    planned_raw = (
+        ROOT
+        / "out"
+        / "source"
+        / "<timestamp>"
+        / "raw"
+    )
+
+    command = kernel_bazel_command(planned_raw)
+
+    print()
+    print("Canonical build command")
+    print("-----------------------")
+    print(
+        " ".join(
+            str(value)
+            for value in command
+        )
+    )
+
+    print()
+    print("Output contract")
+    print("---------------")
+    print(
+        "Generation: "
+        f"{ROOT / 'out' / 'source' / '<timestamp>'}"
+    )
+    print(
+        "Raw dist:   "
+        f"{planned_raw}"
+    )
+
+    print()
+    print("Expected primary raw artifacts:")
+    for name in (
+        "boot.img",
+        "dtbo.img",
+        "vendor_kernel_boot.img",
+        "system_dlkm.img",
+        "vendor_dlkm.img",
+    ):
+        print(f"  {name}")
+
+    print()
+    print("Execution")
+    print("---------")
+    print("BUILD STARTED: NO")
+    print("DEVICE MODIFIED: NO")
+    print("ADB INVOKED: NO")
+    print("FASTBOOT INVOKED: NO")
+
+
+def new_build_generation() -> tuple[Path, Path]:
+    stamp = time.strftime(
+        "%Y%m%d-%H%M%S%z",
+        time.localtime(),
+    )
+
+    generation = (
+        ROOT
+        / "out"
+        / "source"
+        / stamp
+    )
+
+    raw = generation / "raw"
+
+    if generation.exists():
+        raise KernelCtlError(
+            f"build generation already exists: {generation}"
+        )
+
+    raw.mkdir(
+        parents=True,
+        exist_ok=False,
+    )
+
+    return generation, raw
+
+
+def write_build_metadata(
+    *,
+    generation: Path,
+    raw: Path,
+    command,
+    environment: dict,
+    contract: dict,
+):
+    metadata = generation / "metadata"
+    metadata.mkdir(parents=True, exist_ok=True)
+
+    provider_heads = {}
+
+    manifest = provider_manifest()
+
+    for name, provider in manifest["providers"].items():
+        workspace = ROOT / provider["workspace_path"]
+
+        provider_heads[name] = {
+            "workspace_path": provider["workspace_path"],
+            "revision": git_head(workspace),
+        }
+
+    data = {
+        "schema": 1,
+        "device": DEVICE,
+        "kernel_provider_release": KERNEL_PROVIDER_RELEASE,
+        "workspace": str(ROOT),
+        "generation": str(generation),
+        "raw": str(raw),
+        "command": [
+            str(value)
+            for value in command
+        ],
+        "java_home": environment.get("JAVA_HOME"),
+        "provider_heads": provider_heads,
+        "treeforge_tools_contract": str(
+            TREEFORGE_TOOLS_CONTRACT
+        ),
+        "treeforge_tools": {
+            name: record.get("path")
+            for name, record in contract["tools"].items()
+        },
+    }
+
+    target = metadata / "build.json"
+
+    target.write_text(
+        json.dumps(
+            data,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    return target
+
+
+def verify_raw_build(raw: Path):
+    required = (
+        "boot.img",
+        "dtbo.img",
+        "vendor_kernel_boot.img",
+        "system_dlkm.img",
+        "vendor_dlkm.img",
+    )
+
+    missing = []
+
+    for name in required:
+        path = raw / name
+
+        if not path.is_file():
+            missing.append(name)
+
+    if missing:
+        raise KernelCtlError(
+            "kernel build completed but required raw artifacts "
+            "are missing: "
+            + ", ".join(missing)
+        )
+
+    print()
+    print("Primary raw artifacts")
+    print("---------------------")
+
+    for name in required:
+        path = raw / name
+
+        print(
+            f"{name:24s} "
+            f"{path.stat().st_size:12d} bytes  "
+            f"{path}"
+        )
+
+
+def execute_kernel_build() -> int:
+    print("TreeForge Kernel Build")
+    print("======================")
+    print()
+    print(f"Workspace:        {ROOT}")
+    print(f"Provider release: {KERNEL_PROVIDER_RELEASE}")
+
+    env, environment_plan = prepare_kernel_build_providers()
+    contract = load_treeforge_tools_contract()
+
+    generation, raw = new_build_generation()
+
+    command = kernel_bazel_command(raw)
+
+    metadata = write_build_metadata(
+        generation=generation,
+        raw=raw,
+        command=command,
+        environment=env,
+        contract=contract,
+    )
+
+    print()
+    print("Build generation")
+    print("----------------")
+    print(f"Generation: {generation}")
+    print(f"Raw dist:   {raw}")
+    print(f"Metadata:   {metadata}")
+
+    print()
+    print("Build command")
+    print("-------------")
+    print(
+        " ".join(
+            str(value)
+            for value in command
+        )
+    )
+
+    print()
+    print("BUILD STARTED: YES")
+    print()
+
+    result = subprocess.run(
+        [
+            str(value)
+            for value in command
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        raise KernelCtlError(
+            f"kernel build failed with exit code "
+            f"{result.returncode}; generation preserved at "
+            f"{generation}"
+        )
+
+    verify_raw_build(raw)
+
+    print()
+    print("Kernel build complete")
+    print("---------------------")
+    print(f"Generation: {generation}")
+    print(f"Raw dist:   {raw}")
+    print("DEVICE MODIFIED: NO")
+    print("ADB INVOKED: NO")
+    print("FASTBOOT INVOKED: NO")
+
+    return 0
+
+
+def build_command(argv) -> int:
+    parser = argparse.ArgumentParser(
+        prog="kernelctl build",
+        description=(
+            "TreeForge tangorpro kernel build with "
+            "verified provider resolution"
+        ),
+    )
+
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help=(
+            "resolve and validate providers without "
+            "starting the kernel build"
+        ),
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.plan_only:
+        kernel_build_plan()
+        return 0
+
+    return execute_kernel_build()
+
+
+def detect_transport():
+    adb = subprocess.run(
+        ["adb", "get-state"],
+        text=True,
+        capture_output=True,
+    )
+
+    if adb.returncode == 0 and "device" in adb.stdout:
+        return "adb"
+
+    fb = subprocess.run(
+        ["fastboot", "devices"],
+        text=True,
+        capture_output=True,
+    )
+
+    if fb.stdout.strip():
+        userspace = subprocess.run(
+            ["fastboot", "getvar", "is-userspace"],
+            text=True,
+            capture_output=True,
+        )
+
+        text = userspace.stdout + userspace.stderr
+
+        if "yes" in text:
+            return "fastbootd"
+
+        return "bootloader"
+
+    return "none"
+
+
+def ensure_bootloader():
+    transport = detect_transport()
+
+    if transport == "adb":
+        run(["adb", "reboot", "bootloader"])
+        time.sleep(4)
+
+    elif transport == "fastbootd":
+        run(["fastboot", "reboot", "bootloader"])
+        time.sleep(4)
+
+    elif transport == "bootloader":
+        pass
+
+    else:
+        raise KernelCtlError("no ADB/Fastboot device detected")
+
+    product = output(["fastboot", "getvar", "product"])
+
+    if DEVICE not in product:
+        raise KernelCtlError(
+            f"refusing to flash non-{DEVICE} device"
+        )
+
+    unlocked = output(["fastboot", "getvar", "unlocked"])
+
+    if "yes" not in unlocked.lower():
+        raise KernelCtlError("device bootloader is not unlocked")
+
+
+def ensure_fastbootd():
+    ensure_bootloader()
+
+    run(["fastboot", "reboot", "fastboot"])
+    time.sleep(5)
+
+    state = output(["fastboot", "getvar", "is-userspace"])
+
+    if "yes" not in state.lower():
+        raise KernelCtlError("failed to enter fastbootd")
+
+
+def flash(stage: Path, slot: str, active: str, reboot: bool):
+    if slot not in ("a", "b", "both"):
+        raise KernelCtlError("flash slot must be a, b, or both")
+
+    slots = ("a", "b") if slot == "both" else (slot,)
+
+    if active not in ("keep", "a", "b"):
+        raise KernelCtlError("active slot must be keep, a, or b")
+
+    print()
+    print("FLASH PLAN")
+    print("----------")
+    print(f"Target slot:       {slot.upper() if slot != 'both' else 'A + B'}")
+    print(f"Active after:      {active}")
+    print(f"Reboot Android:    {'YES' if reboot else 'NO'}")
+    print()
+    print("Physical:")
+    for target_slot in slots:
+        print(f"  boot_{target_slot}")
+        print(f"  init_boot_{target_slot}")
+        print(f"  dtbo_{target_slot}")
+        print(f"  vendor_boot_{target_slot}")
+        print(f"  vendor_kernel_boot_{target_slot}")
+        print(f"  vbmeta_{target_slot}")
+        print(f"  vbmeta_system_{target_slot}")
+        print(f"  vbmeta_vendor_{target_slot}")
+
+    print()
+    print("Logical:")
+    for target_slot in slots:
+        print(f"  vendor_dlkm_{target_slot}")
+        print(f"  system_dlkm_{target_slot}")
+    print()
+
+    while True:
+        answer = input("Proceed with flash? [y/N]: ").strip().lower()
+
+        if answer in ("", "n", "no"):
+            print("Flash cancelled.")
+            return
+
+        if answer in ("y", "yes"):
+            break
+
+        print("Please answer yes or no.")
+
+    ensure_bootloader()
+
+    physical = (
+        ("boot", "boot.img"),
+        ("init_boot", "init_boot.img"),
+        ("dtbo", "dtbo.img"),
+        ("vendor_boot", "vendor_boot.img"),
+        ("vendor_kernel_boot", "vendor_kernel_boot.img"),
+        ("vbmeta_system", "vbmeta_system.img"),
+        ("vbmeta_vendor", "vbmeta_vendor.img"),
+        ("vbmeta", "vbmeta.img"),
+    )
+
+    for target_slot in slots:
+        for partition, filename in physical:
+            run([
+                "fastboot",
+                "flash",
+                f"{partition}_{target_slot}",
+                stage / filename,
+            ])
+
+    ensure_fastbootd()
+
+    for target_slot in slots:
+        run([
+            "fastboot",
+            "flash",
+            f"vendor_dlkm_{target_slot}",
+            stage / "vendor_dlkm.img",
+        ])
+
+        run([
+            "fastboot",
+            "flash",
+            f"system_dlkm_{target_slot}",
+            stage / "system_dlkm.img",
+        ])
+
+    # Always return to bootloader before final slot/reboot choice.
+    run(["fastboot", "reboot", "bootloader"])
+    time.sleep(4)
+
+    if active in ("a", "b"):
+        run(["fastboot", f"--set-active={active}"])
+
+    current = output(["fastboot", "getvar", "current-slot"])
+    print(current.strip())
+
+    if reboot:
+        run(["fastboot", "reboot"])
+    else:
+        print("Device left in bootloader fastboot.")
+
+
+def choose(prompt, choices):
+    print()
+    print(prompt)
+
+    for index, (label, value) in enumerate(choices, 1):
+        print(f"  {index}) {label}")
+
+    while True:
+        answer = input("> ").strip()
+
+        try:
+            index = int(answer)
+        except ValueError:
+            continue
+
+        if 1 <= index <= len(choices):
+            return choices[index - 1][1]
+
+
+def interactive():
+    provider = choose(
+        "Signing provider:",
+        [
+            ("AOSP test keys", "aosp"),
+            ("TreeForge development keys", "treeforge"),
+        ],
+    )
+
+    stage = package(provider)
+
+    do_flash = choose(
+        "Flash this package?",
+        [
+            ("No - package only", False),
+            ("Yes", True),
+        ],
+    )
+
+    if not do_flash:
+        return
+
+    slot = choose(
+        "Flash target slot:",
+        [
+            ("Slot A", "a"),
+            ("Slot B", "b"),
+            ("Both slots A + B", "both"),
+        ],
+    )
+
+    active = choose(
+        "Active slot after flashing:",
+        [
+            ("Keep current active slot", "keep"),
+            ("Set slot A active", "a"),
+            ("Set slot B active", "b"),
+        ],
+    )
+
+    reboot = choose(
+        "Reboot Android after flashing?",
+        [
+            ("No - leave in bootloader", False),
+            ("Yes", True),
+        ],
+    )
+
+    flash(stage, slot, active, reboot)
+
+
+def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "build":
+        try:
+            return build_command(sys.argv[2:])
+        except KeyboardInterrupt:
+            print("\nCancelled.")
+            return 130
+        except KernelCtlError as error:
+            print(f"\nERROR: {error}", file=sys.stderr)
+            return 1
+
+    parser = argparse.ArgumentParser(
+        prog="kernelctl",
+        description=(
+            "TreeForge tangorpro kernel packaging/signing/flashing CLI"
+        ),
+    )
+
+    parser.add_argument(
+        "--signing",
+        choices=("aosp", "treeforge"),
+        help="AVB signing provider",
+    )
+
+    parser.add_argument(
+        "--package-only",
+        action="store_true",
+        help="package/sign but do not flash",
+    )
+
+    parser.add_argument(
+        "--slot",
+        choices=("a", "b", "both"),
+        help="slot to flash",
+    )
+
+    parser.add_argument(
+        "--active",
+        choices=("keep", "a", "b"),
+        default="keep",
+        help="active slot after flashing",
+    )
+
+    parser.add_argument(
+        "--reboot",
+        action="store_true",
+        help="reboot Android after flashing",
+    )
+
+    args = parser.parse_args()
+
+    try:
+        if not args.signing:
+            interactive()
+            return 0
+
+        stage = package(args.signing)
+
+        if args.package_only:
+            return 0
+
+        if not args.slot:
+            raise KernelCtlError(
+                "--slot a|b|both is required unless --package-only is used"
+            )
+
+        flash(stage, args.slot, args.active, args.reboot)
+        return 0
+
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        return 130
+
+    except KernelCtlError as error:
+        print(f"\nERROR: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

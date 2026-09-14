@@ -1,0 +1,35 @@
+{
+    "schema": 1,
+    "family": "treeforge-kernel-host-tools-release-lock",
+    "source_repository": "TreeForgeDEV/treeforge_toolchain",
+    "source_commit": "53056b875f3c9d365ca90e2ff8a6c262ed9c0365",
+    "distribution": "GITHUB_RELEASE_ASSET",
+    "floating_latest_allowed": false,
+    "release_repository": "TreeForgeAOSP/treeforge_toolchain",
+    "providers": {
+        "android-image-tools": {
+            "release": "android-15.0.0_r36-linux-x86_64",
+            "release_tag": "android-image-tools/android-15.0.0_r36-1",
+            "archive": "android-image-tools-android-15.0.0_r36-linux-x86_64.tar.xz",
+            "archive_sha256": "23c41550fbbc56396ff9d67b17d1f4dc9e25cbeaae02b784c646b4e8363e4c59"
+        },
+        "avbtool": {
+            "release": "android-15.0.0_r36-linux-x86_64",
+            "release_tag": "avbtool/android-15.0.0_r36-1",
+            "archive": "avbtool-android-15.0.0_r36-linux-x86_64.tar.xz",
+            "archive_sha256": "16702f5668191bf9425bdd14200aea47606eeb055d1d8f6f20afa151675d3717"
+        },
+        "treeforge-adb": {
+            "release": "android-15.0.0_r36-linux-x86_64",
+            "release_tag": "treeforge-adb/android-15.0.0_r36-1",
+            "archive": "treeforge-adb-android-15.0.0_r36-linux-x86_64.tar.xz",
+            "archive_sha256": "e22f46486f8842f10e3b0634f116aa591031e594333e1924510d06fdd34976ce"
+        },
+        "treeforge-fastboot": {
+            "release": "android-15.0.0_r36-linux-x86_64",
+            "release_tag": "treeforge-fastboot/android-15.0.0_r36-1",
+            "archive": "treeforge-fastboot-android-15.0.0_r36-linux-x86_64.tar.xz",
+            "archive_sha256": "bcc26d3f9e6181960bb19b103bbbd0d2f1cb7cf1b821279a101f380168e09afc"
+        }
+    }
+}

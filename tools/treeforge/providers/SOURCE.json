@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "source_repository": "git@github.com:TreeForgeDEV/treeforge_toolchain.git",
+  "source_commit": "5f0672c3b83fdb22989a8bb03f60d19cb1822615",
+  "source_commit_role": "base",
+  "source_relation": "derived",
+  "purpose": "Kernel-local provider resolver code and immutable provider manifests for standalone TreeForge kernel builds.",
+  "derivations": [
+    {
+      "path": "scripts/kernel-treeforge-tools",
+      "base_sha256": "093d46994d077ef18e74da73b2478da5169f211894b5ba6a4dbc0604cfa2f6d7",
+      "vendored_sha256": "0c16f8a3bd2f8c73aca0be0cea81082735ba80b8d711544388fde5dd70193a2f",
+      "reason": "Kernel-local standalone provider acquisition without a sibling treeforge_toolchain checkout.",
+      "features": [
+        "configurable materialized-provider cache root",
+        "configurable downloaded-archive cache",
+        "configurable resolved-contract path",
+        "locked local release-asset acquisition",
+        "exact GitHub Release asset acquisition",
+        "locked archive SHA-256 verification",
+        "atomic provider-cache population"
+      ]
+    }
+  ],
+  "release_provenance": "host-tools.lock.json"
+}

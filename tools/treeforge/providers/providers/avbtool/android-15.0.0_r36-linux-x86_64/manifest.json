@@ -1,0 +1,60 @@
+{
+  "architecture": "x86_64",
+  "executables": [
+    {
+      "capabilities": [
+        "android-avbtool"
+      ],
+      "name": "avbtool",
+      "path": "bin/avbtool",
+      "sha256": "b18336e926e557705f3a77c5ec3ad1ae7411c46373a366e5146374d852eee863"
+    }
+  ],
+  "legal_files": [
+    {
+      "path": "legal/LEGAL-SOURCES.json",
+      "sha256": "376142a7d69baa00c8edf3db77be4ffa5e7a30d930c51dc059734bc2ae634bd5"
+    },
+    {
+      "path": "legal/NOTICE.txt",
+      "sha256": "8143e315d770052be333cbafbbd66bb9cb2bb5cd3baab7de9a89db8f34299a4d"
+    },
+    {
+      "path": "legal/upstream/external/avb/LICENSE",
+      "sha256": "7b64210dc457e50fdcdf49c44d3efa19d78d6f49aa141862592ac31b700c19d2"
+    },
+    {
+      "path": "legal/upstream/external/avb/MODULE_LICENSE_APACHE2",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "legal/upstream/external/avb/MODULE_LICENSE_BSD",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "legal/upstream/external/avb/MODULE_LICENSE_MIT",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "name": "avbtool",
+  "platform": "linux",
+  "provenance_files": [
+    {
+      "path": "provenance/PROVENANCE.json",
+      "sha256": "820d38a29d38683b0f2849e311b99ad4458ccbb588474586154753dba1e94d98"
+    }
+  ],
+  "provider_sources": [
+    {
+      "module": "external/avb/avbtool.py",
+      "platform": "android",
+      "platform_release": "android-15.0.0_r36",
+      "project": "platform/external/avb",
+      "revision": "d289c2ba6de359471b23d594623b906876bc48a0",
+      "source_path": "external/avb"
+    }
+  ],
+  "release": "android-15.0.0_r36-linux-x86_64",
+  "runtime_files": [],
+  "schema": 2
+}
