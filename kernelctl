@@ -131,20 +131,69 @@ def need_command(name: str):
 
 
 def avbtool_path():
-    candidate = AOSP / "out/host/linux-x86/bin/avbtool"
+    """
+    Resolve avbtool exclusively from the verified TreeForge
+    host-tool provider contract.
 
-    if candidate.is_file():
-        return candidate
+    Never fall back to an AOSP checkout or distro avbtool.
+    """
+    need_file(TREEFORGE_TOOLS_CONTRACT)
 
-    candidate = (
-        ROOT
-        / "prebuilts/kernel-build-tools/linux-x86/bin/avbtool"
+    data = json.loads(
+        TREEFORGE_TOOLS_CONTRACT.read_text(
+            encoding="utf-8"
+        )
     )
 
-    if candidate.is_file():
-        return candidate
+    tools = data.get("tools")
 
-    raise KernelCtlError("avbtool not found")
+    if not isinstance(tools, dict):
+        raise KernelCtlError(
+            "TreeForge host-tool contract has no tools map"
+        )
+
+    entry = tools.get("avbtool")
+
+    if not isinstance(entry, dict):
+        raise KernelCtlError(
+            "TreeForge host-tool contract has no avbtool entry"
+        )
+
+    value = entry.get("path")
+
+    if not value:
+        raise KernelCtlError(
+            "TreeForge avbtool provider path is missing"
+        )
+
+    path = Path(value).expanduser()
+
+    need_file(path)
+
+    expected_sha256 = entry.get("sha256")
+
+    if expected_sha256:
+        digest = hashlib.sha256()
+
+        with path.open("rb") as stream:
+            for chunk in iter(
+                lambda: stream.read(1024 * 1024),
+                b"",
+            ):
+                digest.update(chunk)
+
+        actual_sha256 = digest.hexdigest()
+
+        if actual_sha256 != expected_sha256:
+            raise KernelCtlError(
+                "TreeForge avbtool provider SHA256 mismatch:\n"
+                f"  expected={expected_sha256}\n"
+                f"  actual={actual_sha256}\n"
+                f"  path={path}"
+            )
+
+    return path
+
 
 
 def avb_info(image: Path):
@@ -154,7 +203,7 @@ def avb_info(image: Path):
 
 def field(info: str, name: str):
     match = re.search(
-        rf"^{re.escape(name)}:\s*(.+?)\s*$",
+        rf"^\s*{re.escape(name)}:\s*(.+?)\s*$",
         info,
         re.MULTILINE,
     )
@@ -463,28 +512,60 @@ def add_hash_footer(
     key: Path | None = None,
     algorithm: str | None = None,
     rollback_index: int | None = None,
+    salt: str | None = None,
     props=(),
 ):
     command = [
         avbtool_path(),
         "add_hash_footer",
-        "--image", image,
-        "--partition_name", partition_name,
-        "--partition_size", str(partition_size),
+        "--image",
+        image,
+        "--partition_name",
+        partition_name,
+        "--partition_size",
+        str(partition_size),
     ]
 
     if key is not None:
-        command.extend(["--key", key])
+        command.extend([
+            "--key",
+            key,
+        ])
 
     if algorithm is not None:
-        command.extend(["--algorithm", algorithm])
+        command.extend([
+            "--algorithm",
+            algorithm,
+        ])
 
     if rollback_index is not None:
-        command.extend(["--rollback_index", str(rollback_index)])
+        command.extend([
+            "--rollback_index",
+            str(rollback_index),
+        ])
 
-    append_props(command, props)
+    if salt is not None:
+        if not re.fullmatch(
+            r"[0-9a-fA-F]+",
+            salt,
+        ):
+            raise KernelCtlError(
+                f"{partition_name}: invalid AVB salt"
+            )
+
+        command.extend([
+            "--salt",
+            salt,
+        ])
+
+    append_props(
+        command,
+        props,
+    )
 
     run(command)
+
+
 
 
 def package(provider: str):
@@ -1718,6 +1799,10 @@ def package_source_generation(
             stock_boot_info,
             "Rollback Index",
         ),
+        salt=field(
+            stock_boot_info,
+            "Salt",
+        ),
         props=properties(stock_boot_info),
     )
 
@@ -1750,6 +1835,10 @@ def package_source_generation(
         rollback_index=integer_field(
             stock_init_info,
             "Rollback Index",
+        ),
+        salt=field(
+            stock_init_info,
+            "Salt",
         ),
         props=properties(stock_init_info),
     )
@@ -1790,6 +1879,10 @@ def package_source_generation(
         dtbo,
         partition_name="dtbo",
         partition_size=stock_dtbo.stat().st_size,
+        salt=field(
+            stock_dtbo_info,
+            "Salt",
+        ),
         props=properties(stock_dtbo_info),
     )
 
@@ -1849,6 +1942,10 @@ def package_source_generation(
         vendor_kernel_boot,
         partition_name="vendor_kernel_boot",
         partition_size=stock_vkb.stat().st_size,
+        salt=field(
+            stock_vkb_info,
+            "Salt",
+        ),
         props=properties(stock_vkb_info),
     )
 
