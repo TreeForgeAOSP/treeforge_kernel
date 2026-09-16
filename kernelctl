@@ -27,7 +27,13 @@ TREEFORGE_KEYS = (
     / ".treeforge-private/keys/avb/android-15.0.0_r36/tangorpro"
 )
 
-AOSP_AVB_KEYS = AOSP / "external/avb/test/data"
+AOSP_AVB_KEY_ROOT = (
+    ROOT / "keys/aosp/android-15-r36"
+)
+
+AOSP_AVB_KEYS = (
+    AOSP_AVB_KEY_ROOT / "materialized"
+)
 
 DEVICE = "tangorpro"
 
@@ -221,16 +227,173 @@ def public_key_sha1(key: Path):
             pass
 
 
+
+def materialize_aosp_keyset(
+    workspace: Path = ROOT,
+) -> Path:
+    key_root = (
+        workspace
+        / "keys"
+        / "aosp"
+        / "android-15-r36"
+    )
+
+    keyset_path = (
+        key_root
+        / "KEYSET.json"
+    )
+
+    need_file(keyset_path)
+
+    data = json.loads(
+        keyset_path.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    source_info = data.get("source")
+
+    if not isinstance(source_info, dict):
+        raise KernelCtlError(
+            "AOSP keyset source metadata missing"
+        )
+
+    source_2048_value = source_info.get(
+        "rsa2048"
+    )
+
+    source_4096_value = source_info.get(
+        "rsa4096"
+    )
+
+    if not source_2048_value or not source_4096_value:
+        raise KernelCtlError(
+            "AOSP keyset source paths missing"
+        )
+
+    source_2048 = (
+        workspace
+        / source_2048_value
+    )
+
+    source_4096 = (
+        workspace
+        / source_4096_value
+    )
+
+    need_file(source_2048)
+    need_file(source_4096)
+
+    nodes = data.get("signing_nodes")
+
+    if not isinstance(nodes, dict):
+        raise KernelCtlError(
+            "AOSP signing-node metadata missing"
+        )
+
+    child = nodes.get("boot")
+    root_node = nodes.get("vbmeta")
+
+    if (
+        not isinstance(child, dict)
+        or not isinstance(root_node, dict)
+    ):
+        raise KernelCtlError(
+            "canonical AOSP signing identities missing"
+        )
+
+    expected_2048 = child.get("sha256")
+    expected_4096 = root_node.get("sha256")
+
+    if file_sha256(source_2048) != expected_2048:
+        raise KernelCtlError(
+            "canonical AOSP RSA2048 source "
+            "identity mismatch"
+        )
+
+    if file_sha256(source_4096) != expected_4096:
+        raise KernelCtlError(
+            "canonical AOSP RSA4096 source "
+            "identity mismatch"
+        )
+
+    destination = (
+        key_root
+        / "materialized"
+    )
+
+    destination.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    mapping = {
+        "testkey_rsa2048.pem": source_2048,
+        "testkey_rsa4096.pem": source_4096,
+        "boot.pem": source_2048,
+        "init_boot.pem": source_2048,
+        "vbmeta_system.pem": source_2048,
+        "vbmeta_vendor.pem": source_2048,
+        "vbmeta.pem": source_4096,
+    }
+
+    for name, source in mapping.items():
+        target = destination / name
+
+        expected = (
+            expected_4096
+            if name in (
+                "testkey_rsa4096.pem",
+                "vbmeta.pem",
+            )
+            else expected_2048
+        )
+
+        if (
+            target.is_file()
+            and file_sha256(target) == expected
+        ):
+            target.chmod(0o600)
+            continue
+
+        if target.exists() or target.is_symlink():
+            target.unlink()
+
+        shutil.copy2(
+            source,
+            target,
+        )
+
+        target.chmod(0o600)
+
+        actual = file_sha256(target)
+
+        if actual != expected:
+            raise KernelCtlError(
+                f"materialized AOSP key mismatch: {name}"
+            )
+
+    print()
+    print("AOSP AVB development keys")
+    print("-------------------------")
+    print(f"Source:       pinned Google kernel source")
+    print(f"Materialized: {destination}")
+    print("Tracked:      NO")
+    print("RSA2048:      PASS")
+    print("RSA4096:      PASS")
+
+    return destination
+
+
 def provider_keys(provider: str):
     if provider == "aosp":
-        rsa2048 = AOSP_AVB_KEYS / "testkey_rsa2048.pem"
-
+        materialize_aosp_keyset()
         keys = {
-            "boot": rsa2048,
-            "init_boot": rsa2048,
-            "vbmeta_system": rsa2048,
-            "vbmeta_vendor": rsa2048,
-            "vbmeta": AOSP_AVB_KEYS / "testkey_rsa4096.pem",
+            "boot": AOSP_AVB_KEYS / "boot.pem",
+            "init_boot": AOSP_AVB_KEYS / "init_boot.pem",
+            "vbmeta_system": AOSP_AVB_KEYS / "vbmeta_system.pem",
+            "vbmeta_vendor": AOSP_AVB_KEYS / "vbmeta_vendor.pem",
+            "vbmeta": AOSP_AVB_KEYS / "vbmeta.pem",
         }
 
     elif provider == "treeforge":
@@ -1328,7 +1491,861 @@ def verify_raw_build(raw: Path):
         )
 
 
-def execute_kernel_build() -> int:
+
+AOSP_BUILD_BOOT_KEY = AOSP_AVB_KEYS / "boot.pem"
+
+AOSP_BUILD_BOOT_KEY_SHA256 = (
+    "f1d5765a2bdfb92fb08aee021107c7ac"
+    "1a7a3f590dafd853771c85375ef0fbd7"
+)
+
+AOSP_BUILD_BOOT_PUBLIC_SHA1 = (
+    "cdbb77177f731920bbe0a0f94f84d9038ae0617d"
+)
+
+BOOT_PARTITION_SIZE = 67108864
+BOOT_ROLLBACK_INDEX = 1746403200
+BOOT_ROLLBACK_INDEX_LOCATION = 0
+BOOT_OS_VERSION = "15"
+BOOT_SECURITY_PATCH = "2025-05-05"
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+def build_signing_key(signing: str) -> Path | None:
+    if signing == "none":
+        return None
+
+    if signing == "aosp":
+        materialize_aosp_keyset()
+        key = AOSP_BUILD_BOOT_KEY
+        need_file(key)
+
+        actual = file_sha256(key)
+
+        if actual != AOSP_BUILD_BOOT_KEY_SHA256:
+            raise KernelCtlError(
+                "AOSP boot test key identity mismatch:\n"
+                f"  expected={AOSP_BUILD_BOOT_KEY_SHA256}\n"
+                f"  actual={actual}\n"
+                f"  path={key}"
+            )
+
+        public = public_key_sha1(key)
+
+        if public != AOSP_BUILD_BOOT_PUBLIC_SHA1:
+            raise KernelCtlError(
+                "AOSP boot test public-key identity mismatch:\n"
+                f"  expected={AOSP_BUILD_BOOT_PUBLIC_SHA1}\n"
+                f"  actual={public}"
+            )
+
+        return key
+
+    if signing == "treeforge":
+        key = TREEFORGE_KEYS / "boot.pem"
+        need_file(key)
+        return key
+
+    raise KernelCtlError(
+        f"unsupported build signing provider: {signing}"
+    )
+
+
+def print_build_signing_plan(signing: str) -> None:
+    key = build_signing_key(signing)
+
+    print()
+    print("Package/sign")
+    print("------------")
+    print(f"Signing provider: {signing}")
+
+    if key is None:
+        print("Signed package:   NO")
+        print("Key:              none")
+    else:
+        print("Signed package:   YES")
+        print(f"Key:              {key}")
+        print(f"Public key SHA1:  {public_key_sha1(key)}")
+        print("Algorithm:        SHA256_RSA2048")
+        print(f"Partition size:   {BOOT_PARTITION_SIZE}")
+        print(f"Rollback index:   {BOOT_ROLLBACK_INDEX}")
+        print(
+            "Rollback location:"
+            f" {BOOT_ROLLBACK_INDEX_LOCATION}"
+        )
+        print(f"OS version:       {BOOT_OS_VERSION}")
+        print(f"Security patch:   {BOOT_SECURITY_PATCH}")
+
+    print("Raw artifacts:    preserved")
+    print("Package output:   out/source/<timestamp>/package/")
+    print(
+        "Final package:    "
+        "10 verified-boot images"
+    )
+
+
+def latest_source_generation() -> tuple[Path, Path]:
+    source_root = ROOT / "out" / "source"
+
+    if not source_root.is_dir():
+        raise KernelCtlError(
+            f"source build output root missing: {source_root}"
+        )
+
+    candidates = []
+
+    for generation in source_root.iterdir():
+        raw = generation / "raw"
+
+        if (
+            generation.is_dir()
+            and raw.is_dir()
+            and (raw / "boot.img").is_file()
+        ):
+            candidates.append(generation)
+
+    if not candidates:
+        raise KernelCtlError(
+            "no completed source generation with raw/boot.img found"
+        )
+
+    generation = max(
+        candidates,
+        key=lambda path: path.stat().st_mtime,
+    )
+
+    return generation, generation / "raw"
+
+
+def package_source_generation(
+    *,
+    generation: Path,
+    raw: Path,
+    signing: str,
+) -> Path:
+    if signing == "none":
+        raise KernelCtlError(
+            "a final verified-boot package requires "
+            "aosp or treeforge signing"
+        )
+
+    keys = provider_keys(signing)
+    avbtool = avbtool_path()
+
+    raw_names = (
+        "boot.img",
+        "dtbo.img",
+        "vendor_kernel_boot.img",
+        "system_dlkm.img",
+        "vendor_dlkm.img",
+    )
+
+    for name in raw_names:
+        need_file(raw / name)
+
+    reference_names = (
+        "boot.img",
+        "init_boot.img",
+        "dtbo.img",
+        "vendor_boot.img",
+        "vendor_kernel_boot.img",
+        "system.img",
+        "system_ext.img",
+        "product.img",
+        "pvmfw.img",
+        "vbmeta.img",
+        "vbmeta_system.img",
+        "vbmeta_vendor.img",
+    )
+
+    for name in reference_names:
+        need_file(AOSP_PRODUCT / name)
+
+    stage = generation / "package"
+    stage.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    raw_before = {
+        name: file_sha256(raw / name)
+        for name in raw_names
+    }
+
+    print()
+    print("Full verified-boot package")
+    print("--------------------------")
+    print(f"Raw:              {raw}")
+    print(f"Package:          {stage}")
+    print(f"Signing provider: {signing}")
+
+    # ---------------------------------------------------------
+    # boot — RSA2048 chain partition
+    # ---------------------------------------------------------
+
+    stock_boot = AOSP_PRODUCT / "boot.img"
+    stock_boot_info = avb_info(stock_boot)
+
+    boot = stage / "boot.img"
+    copy_clean(
+        raw / "boot.img",
+        boot,
+    )
+
+    run([
+        avbtool,
+        "erase_footer",
+        "--image",
+        boot,
+    ])
+
+    add_hash_footer(
+        boot,
+        partition_name="boot",
+        partition_size=stock_boot.stat().st_size,
+        key=keys["boot"],
+        algorithm="SHA256_RSA2048",
+        rollback_index=integer_field(
+            stock_boot_info,
+            "Rollback Index",
+        ),
+        props=properties(stock_boot_info),
+    )
+
+    # ---------------------------------------------------------
+    # init_boot — preserved AOSP payload, RSA2048 resign
+    # ---------------------------------------------------------
+
+    stock_init_boot = AOSP_PRODUCT / "init_boot.img"
+    stock_init_info = avb_info(stock_init_boot)
+
+    init_boot = stage / "init_boot.img"
+    copy_clean(
+        stock_init_boot,
+        init_boot,
+    )
+
+    run([
+        avbtool,
+        "erase_footer",
+        "--image",
+        init_boot,
+    ])
+
+    add_hash_footer(
+        init_boot,
+        partition_name="init_boot",
+        partition_size=stock_init_boot.stat().st_size,
+        key=keys["init_boot"],
+        algorithm="SHA256_RSA2048",
+        rollback_index=integer_field(
+            stock_init_info,
+            "Rollback Index",
+        ),
+        props=properties(stock_init_info),
+    )
+
+    # ---------------------------------------------------------
+    # dtbo — unsigned hash footer, authenticated by root vbmeta
+    # ---------------------------------------------------------
+
+    stock_dtbo = AOSP_PRODUCT / "dtbo.img"
+    stock_dtbo_info = avb_info(stock_dtbo)
+
+    dtbo = stage / "dtbo.img"
+    copy_clean(
+        raw / "dtbo.img",
+        dtbo,
+    )
+
+    probe = run(
+        [
+            avbtool,
+            "info_image",
+            "--image",
+            dtbo,
+        ],
+        capture=True,
+        check=False,
+    )
+
+    if probe.returncode == 0:
+        run([
+            avbtool,
+            "erase_footer",
+            "--image",
+            dtbo,
+        ])
+
+    add_hash_footer(
+        dtbo,
+        partition_name="dtbo",
+        partition_size=stock_dtbo.stat().st_size,
+        props=properties(stock_dtbo_info),
+    )
+
+    # ---------------------------------------------------------
+    # vendor_boot — unchanged AOSP payload
+    # ---------------------------------------------------------
+
+    vendor_boot = stage / "vendor_boot.img"
+
+    copy_clean(
+        AOSP_PRODUCT / "vendor_boot.img",
+        vendor_boot,
+    )
+
+    # ---------------------------------------------------------
+    # vendor_kernel_boot — unsigned hash footer,
+    # authenticated by root vbmeta
+    # ---------------------------------------------------------
+
+    stock_vkb = (
+        AOSP_PRODUCT
+        / "vendor_kernel_boot.img"
+    )
+
+    stock_vkb_info = avb_info(stock_vkb)
+
+    vendor_kernel_boot = (
+        stage
+        / "vendor_kernel_boot.img"
+    )
+
+    copy_clean(
+        raw / "vendor_kernel_boot.img",
+        vendor_kernel_boot,
+    )
+
+    probe = run(
+        [
+            avbtool,
+            "info_image",
+            "--image",
+            vendor_kernel_boot,
+        ],
+        capture=True,
+        check=False,
+    )
+
+    if probe.returncode == 0:
+        run([
+            avbtool,
+            "erase_footer",
+            "--image",
+            vendor_kernel_boot,
+        ])
+
+    add_hash_footer(
+        vendor_kernel_boot,
+        partition_name="vendor_kernel_boot",
+        partition_size=stock_vkb.stat().st_size,
+        props=properties(stock_vkb_info),
+    )
+
+    # ---------------------------------------------------------
+    # DLKM — Kleaf already produced their AVB hashtrees.
+    # Their descriptors are authenticated by vbmeta nodes.
+    # ---------------------------------------------------------
+
+    vendor_dlkm = stage / "vendor_dlkm.img"
+    system_dlkm = stage / "system_dlkm.img"
+
+    copy_clean(
+        raw / "vendor_dlkm.img",
+        vendor_dlkm,
+    )
+
+    copy_clean(
+        raw / "system_dlkm.img",
+        system_dlkm,
+    )
+
+    for name, image in (
+        ("vendor_dlkm", vendor_dlkm),
+        ("system_dlkm", system_dlkm),
+    ):
+        info = avb_info(image)
+
+        if "Hashtree descriptor:" not in info:
+            raise KernelCtlError(
+                f"{name}: expected AVB hashtree missing"
+            )
+
+    # ---------------------------------------------------------
+    # vbmeta_system — RSA2048
+    # ---------------------------------------------------------
+
+    stock_vbmeta_system = (
+        AOSP_PRODUCT
+        / "vbmeta_system.img"
+    )
+
+    stock_vbs_info = avb_info(
+        stock_vbmeta_system
+    )
+
+    vbmeta_system = (
+        stage
+        / "vbmeta_system.img"
+    )
+
+    command = [
+        avbtool,
+        "make_vbmeta_image",
+        "--output",
+        vbmeta_system,
+        "--key",
+        keys["vbmeta_system"],
+        "--algorithm",
+        "SHA256_RSA2048",
+        "--rollback_index",
+        str(
+            integer_field(
+                stock_vbs_info,
+                "Rollback Index",
+            )
+        ),
+        "--padding_size",
+        str(
+            stock_vbmeta_system.stat().st_size
+        ),
+
+        "--include_descriptors_from_image",
+        AOSP_PRODUCT / "system.img",
+
+        "--include_descriptors_from_image",
+        system_dlkm,
+
+        "--include_descriptors_from_image",
+        AOSP_PRODUCT / "system_ext.img",
+
+        "--include_descriptors_from_image",
+        AOSP_PRODUCT / "product.img",
+
+        "--include_descriptors_from_image",
+        AOSP_PRODUCT / "pvmfw.img",
+    ]
+
+    append_props(
+        command,
+        properties(
+            stock_vbs_info,
+            "com.android.build.system_dlkm.",
+        ),
+    )
+
+    run(command)
+
+    # ---------------------------------------------------------
+    # vbmeta_vendor — RSA2048, preserve AOSP vendor descriptor
+    # ---------------------------------------------------------
+
+    stock_vbmeta_vendor = (
+        AOSP_PRODUCT
+        / "vbmeta_vendor.img"
+    )
+
+    stock_vbv_info = avb_info(
+        stock_vbmeta_vendor
+    )
+
+    vbmeta_vendor = (
+        stage
+        / "vbmeta_vendor.img"
+    )
+
+    run([
+        avbtool,
+        "make_vbmeta_image",
+        "--output",
+        vbmeta_vendor,
+        "--key",
+        keys["vbmeta_vendor"],
+        "--algorithm",
+        "SHA256_RSA2048",
+        "--rollback_index",
+        str(
+            integer_field(
+                stock_vbv_info,
+                "Rollback Index",
+            )
+        ),
+        "--padding_size",
+        str(
+            stock_vbmeta_vendor.stat().st_size
+        ),
+        "--include_descriptors_from_image",
+        stock_vbmeta_vendor,
+    ])
+
+    # ---------------------------------------------------------
+    # Root vbmeta — RSA4096
+    # ---------------------------------------------------------
+
+    pubdir = stage / ".pubkeys"
+
+    if pubdir.exists():
+        shutil.rmtree(pubdir)
+
+    pubdir.mkdir()
+
+    pubs = {}
+
+    for name in (
+        "boot",
+        "init_boot",
+        "vbmeta_system",
+        "vbmeta_vendor",
+    ):
+        pub = pubdir / f"{name}.avbpubkey"
+
+        run([
+            avbtool,
+            "extract_public_key",
+            "--key",
+            keys[name],
+            "--output",
+            pub,
+        ])
+
+        pubs[name] = pub
+
+    stock_vbmeta = (
+        AOSP_PRODUCT
+        / "vbmeta.img"
+    )
+
+    stock_vbmeta_info = avb_info(
+        stock_vbmeta
+    )
+
+    vbmeta = stage / "vbmeta.img"
+
+    command = [
+        avbtool,
+        "make_vbmeta_image",
+        "--output",
+        vbmeta,
+        "--key",
+        keys["vbmeta"],
+        "--algorithm",
+        "SHA256_RSA4096",
+        "--rollback_index",
+        str(
+            integer_field(
+                stock_vbmeta_info,
+                "Rollback Index",
+            )
+        ),
+        "--padding_size",
+        str(stock_vbmeta.stat().st_size),
+
+        "--chain_partition",
+        f"boot:2:{pubs['boot']}",
+
+        "--chain_partition",
+        f"init_boot:4:{pubs['init_boot']}",
+
+        "--chain_partition",
+        (
+            "vbmeta_system:1:"
+            f"{pubs['vbmeta_system']}"
+        ),
+
+        "--chain_partition",
+        (
+            "vbmeta_vendor:3:"
+            f"{pubs['vbmeta_vendor']}"
+        ),
+
+        "--include_descriptors_from_image",
+        dtbo,
+
+        "--include_descriptors_from_image",
+        vendor_boot,
+
+        "--include_descriptors_from_image",
+        vendor_kernel_boot,
+
+        "--include_descriptors_from_image",
+        vendor_dlkm,
+    ]
+
+    append_props(
+        command,
+        properties(
+            stock_vbmeta_info,
+            "com.android.build.vendor_dlkm.",
+        ),
+    )
+
+    run(command)
+
+    # ---------------------------------------------------------
+    # Signed-node verification
+    # ---------------------------------------------------------
+
+    expected_hashes = {
+        "boot": public_key_sha1(
+            keys["boot"]
+        ),
+        "init_boot": public_key_sha1(
+            keys["init_boot"]
+        ),
+        "vbmeta": public_key_sha1(
+            keys["vbmeta"]
+        ),
+        "vbmeta_system": public_key_sha1(
+            keys["vbmeta_system"]
+        ),
+        "vbmeta_vendor": public_key_sha1(
+            keys["vbmeta_vendor"]
+        ),
+    }
+
+    verify_images = {
+        "boot": boot,
+        "init_boot": init_boot,
+        "vbmeta": vbmeta,
+        "vbmeta_system": vbmeta_system,
+        "vbmeta_vendor": vbmeta_vendor,
+    }
+
+    print()
+    print("Signing verification")
+    print("--------------------")
+
+    signing_results = {}
+
+    for name, image in verify_images.items():
+        info = avb_info(image)
+        actual = field(
+            info,
+            "Public key (sha1)",
+        )
+
+        expected = expected_hashes[name]
+
+        if actual != expected:
+            raise KernelCtlError(
+                f"{name}: signing key mismatch: "
+                f"expected {expected}, got {actual}"
+            )
+
+        algorithm = field(
+            info,
+            "Algorithm",
+        )
+
+        expected_algorithm = (
+            "SHA256_RSA4096"
+            if name == "vbmeta"
+            else "SHA256_RSA2048"
+        )
+
+        if algorithm != expected_algorithm:
+            raise KernelCtlError(
+                f"{name}: algorithm mismatch: "
+                f"expected {expected_algorithm}, "
+                f"got {algorithm}"
+            )
+
+        signing_results[name] = {
+            "algorithm": algorithm,
+            "public_key_sha1": actual,
+        }
+
+        print(
+            f"PASS  {name:<15} "
+            f"{algorithm:<16} {actual}"
+        )
+
+    # Verify boot and init_boot cryptographically.
+    for name, image in (
+        ("boot", boot),
+        ("init_boot", init_boot),
+    ):
+        run([
+            avbtool,
+            "verify_image",
+            "--image",
+            image,
+            "--key",
+            keys[name],
+        ])
+
+    # ---------------------------------------------------------
+    # AVB graph sanity
+    # ---------------------------------------------------------
+
+    root_info = avb_info(vbmeta)
+    system_info = avb_info(vbmeta_system)
+    vendor_info = avb_info(vbmeta_vendor)
+
+    for name in (
+        "boot",
+        "init_boot",
+        "vbmeta_system",
+        "vbmeta_vendor",
+        "dtbo",
+        "vendor_boot",
+        "vendor_kernel_boot",
+        "vendor_dlkm",
+    ):
+        if name not in root_info:
+            raise KernelCtlError(
+                f"root vbmeta missing expected target: {name}"
+            )
+
+    for name in (
+        "system",
+        "system_dlkm",
+        "system_ext",
+        "product",
+        "pvmfw",
+    ):
+        if name not in system_info:
+            raise KernelCtlError(
+                f"vbmeta_system missing target: {name}"
+            )
+
+    if "vendor" not in vendor_info:
+        raise KernelCtlError(
+            "vbmeta_vendor missing vendor descriptor"
+        )
+
+    # ---------------------------------------------------------
+    # Final package completeness
+    # ---------------------------------------------------------
+
+    expected = (
+        "boot.img",
+        "init_boot.img",
+        "dtbo.img",
+        "vendor_boot.img",
+        "vendor_kernel_boot.img",
+        "vendor_dlkm.img",
+        "system_dlkm.img",
+        "vbmeta.img",
+        "vbmeta_system.img",
+        "vbmeta_vendor.img",
+    )
+
+    for name in expected:
+        need_file(stage / name)
+
+    # ---------------------------------------------------------
+    # Raw-build immutability
+    # ---------------------------------------------------------
+
+    raw_after = {
+        name: file_sha256(raw / name)
+        for name in raw_names
+    }
+
+    changed = [
+        name
+        for name in raw_names
+        if raw_before[name]
+        != raw_after[name]
+    ]
+
+    if changed:
+        raise KernelCtlError(
+            "raw output changed during packaging: "
+            + ", ".join(changed)
+        )
+
+    # ---------------------------------------------------------
+    # Metadata
+    # ---------------------------------------------------------
+
+    artifacts = {}
+
+    for name in expected:
+        image = stage / name
+
+        artifacts[name] = {
+            "path": str(image),
+            "size": image.stat().st_size,
+            "sha256": file_sha256(image),
+        }
+
+    metadata = {
+        "schema": 3,
+        "stage": "verified-boot-package",
+        "device": DEVICE,
+        "kernel_release": KERNEL_PROVIDER_RELEASE,
+        "signing_provider": signing,
+        "signing_nodes": signing_results,
+        "artifacts": artifacts,
+        "raw_kernel_family_preserved": True,
+        "reference_product": str(AOSP_PRODUCT),
+        "reference_release": "android-15-r36",
+    }
+
+    metadata_dir = generation / "metadata"
+    metadata_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    metadata_path = (
+        metadata_dir
+        / "package.json"
+    )
+
+    metadata_path.write_text(
+        json.dumps(
+            metadata,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    print()
+    print("Final verified-boot package")
+    print("---------------------------")
+
+    for name in expected:
+        image = stage / name
+
+        print(
+            f"{name:<24} "
+            f"{image.stat().st_size:>10} bytes  "
+            f"{file_sha256(image)}"
+        )
+
+    print()
+    print(
+        "Signed nodes: "
+        "boot init_boot vbmeta "
+        "vbmeta_system vbmeta_vendor"
+    )
+    print(
+        "Descriptor-authenticated nodes: "
+        "dtbo vendor_boot vendor_kernel_boot "
+        "vendor_dlkm system_dlkm"
+    )
+    print(f"Metadata: {metadata_path}")
+    print("RAW KERNEL FAMILY MODIFIED: NO")
+
+    return boot
+
+
+def execute_kernel_build(signing: str) -> int:
     print("TreeForge Kernel Build")
     print("======================")
     print()
@@ -1390,11 +2407,19 @@ def execute_kernel_build() -> int:
 
     verify_raw_build(raw)
 
+    package_boot = package_source_generation(
+        generation=generation,
+        raw=raw,
+        signing=signing,
+    )
+
     print()
     print("Kernel build complete")
     print("---------------------")
-    print(f"Generation: {generation}")
-    print(f"Raw dist:   {raw}")
+    print(f"Generation:   {generation}")
+    print(f"Raw dist:     {raw}")
+    print(f"Package boot: {package_boot}")
+    print(f"Signing:      {signing}")
     print("DEVICE MODIFIED: NO")
     print("ADB INVOKED: NO")
     print("FASTBOOT INVOKED: NO")
@@ -1420,13 +2445,610 @@ def build_command(argv) -> int:
         ),
     )
 
+    parser.add_argument(
+        "--signing",
+        choices=("aosp", "treeforge", "none"),
+        default="aosp",
+        help=(
+            "boot AVB signing provider; default: aosp"
+        ),
+    )
+
+    parser.add_argument(
+        "--package-only",
+        action="store_true",
+        help=(
+            "package/sign the newest completed raw source build "
+            "without starting a kernel build"
+        ),
+    )
+
     args = parser.parse_args(argv)
 
     if args.plan_only:
         kernel_build_plan()
+        print_build_signing_plan(args.signing)
+
+        if args.package_only:
+            print()
+            print("Package-only: YES")
+
         return 0
 
-    return execute_kernel_build()
+    if args.package_only:
+        generation, raw = latest_source_generation()
+
+        print("TreeForge Kernel Package")
+        print("========================")
+        print()
+        print(f"Generation: {generation}")
+        print(f"Raw dist:   {raw}")
+
+        verify_raw_build(raw)
+
+        package_boot = package_source_generation(
+            generation=generation,
+            raw=raw,
+            signing=args.signing,
+        )
+
+        print()
+        print("Kernel package complete")
+        print("-----------------------")
+        print(f"Package boot: {package_boot}")
+        print("KERNEL BUILD STARTED: NO")
+        print("DEVICE MODIFIED: NO")
+        print("ADB INVOKED: NO")
+        print("FASTBOOT INVOKED: NO")
+
+        return 0
+
+    return execute_kernel_build(args.signing)
+
+
+
+FINAL_FLASH_PACKAGE_IMAGES = (
+    "boot.img",
+    "init_boot.img",
+    "dtbo.img",
+    "vendor_boot.img",
+    "vendor_kernel_boot.img",
+    "vendor_dlkm.img",
+    "system_dlkm.img",
+    "vbmeta.img",
+    "vbmeta_system.img",
+    "vbmeta_vendor.img",
+)
+
+
+def prepare_flash_host_tools() -> dict:
+    resolver = (
+        ROOT
+        / "tools"
+        / "treeforge"
+        / "providers"
+        / "scripts"
+        / "kernel-treeforge-tools"
+    )
+
+    need_file(resolver)
+
+    run([resolver, "prepare"])
+    run([resolver, "verify"])
+
+    contract = load_treeforge_tools_contract()
+    tools = contract.get("tools", {})
+
+    resolved = {}
+
+    for name in ("adb", "fastboot"):
+        entry = tools.get(name)
+
+        if not isinstance(entry, dict):
+            raise KernelCtlError(
+                f"TreeForge host-tool contract missing {name}"
+            )
+
+        path_value = entry.get("path")
+
+        if not path_value:
+            raise KernelCtlError(
+                f"TreeForge host-tool contract missing {name} path"
+            )
+
+        path = Path(path_value)
+        need_file(path)
+
+        expected_sha256 = entry.get("sha256")
+
+        if expected_sha256:
+            actual_sha256 = file_sha256(path)
+
+            if actual_sha256 != expected_sha256:
+                raise KernelCtlError(
+                    f"{name}: provider SHA256 mismatch:\n"
+                    f"  expected={expected_sha256}\n"
+                    f"  actual={actual_sha256}\n"
+                    f"  path={path}"
+                )
+
+        resolved[name] = path
+
+    prepend = []
+
+    for name in ("adb", "fastboot"):
+        directory = str(resolved[name].parent)
+
+        if directory not in prepend:
+            prepend.append(directory)
+
+    old_path = os.environ.get("PATH", "")
+
+    os.environ["PATH"] = os.pathsep.join(
+        prepend + ([old_path] if old_path else [])
+    )
+
+    for name in ("adb", "fastboot"):
+        selected = shutil.which(name)
+
+        if selected is None:
+            raise KernelCtlError(
+                f"{name}: unavailable after provider resolution"
+            )
+
+        if Path(selected).resolve() != resolved[name].resolve():
+            raise KernelCtlError(
+                f"{name}: refusing non-TreeForge executable:\n"
+                f"  expected={resolved[name]}\n"
+                f"  selected={selected}"
+            )
+
+    print()
+    print("TreeForge flash host tools")
+    print("--------------------------")
+    print(f"adb:      {resolved['adb']}")
+    print(f"fastboot: {resolved['fastboot']}")
+
+    return resolved
+
+
+def resolve_flash_generation(
+    requested: str | None = None,
+) -> tuple[Path, Path, dict]:
+    source_root = ROOT / "out" / "source"
+    need_file(source_root) if source_root.is_file() else None
+
+    if not source_root.is_dir():
+        raise KernelCtlError(
+            f"source output root missing: {source_root}"
+        )
+
+    if requested:
+        candidate = Path(requested).expanduser()
+
+        if not candidate.is_absolute():
+            candidate = source_root / candidate
+
+        generations = [candidate]
+    else:
+        generations = [
+            path
+            for path in source_root.iterdir()
+            if (
+                path.is_dir()
+                and (
+                    path
+                    / "metadata"
+                    / "package.json"
+                ).is_file()
+            )
+        ]
+
+        generations.sort(
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+
+    if not generations:
+        raise KernelCtlError(
+            "no verified kernel package generation found"
+        )
+
+    source_resolved = source_root.resolve()
+
+    last_error = None
+
+    for generation in generations:
+        try:
+            generation_resolved = generation.resolve()
+
+            if (
+                generation_resolved != source_resolved
+                and source_resolved
+                not in generation_resolved.parents
+            ):
+                raise KernelCtlError(
+                    "flash generation is outside canonical "
+                    f"source output root: {generation}"
+                )
+
+            package = generation / "package"
+            metadata_path = (
+                generation
+                / "metadata"
+                / "package.json"
+            )
+
+            if not package.is_dir():
+                raise KernelCtlError(
+                    f"package directory missing: {package}"
+                )
+
+            need_file(metadata_path)
+
+            metadata = json.loads(
+                metadata_path.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            if metadata.get("stage") != "verified-boot-package":
+                raise KernelCtlError(
+                    "generation is not an accepted "
+                    "verified-boot package"
+                )
+
+            if metadata.get("schema") != 3:
+                raise KernelCtlError(
+                    "unsupported package metadata schema: "
+                    f"{metadata.get('schema')}"
+                )
+
+            if (
+                metadata.get("raw_kernel_family_preserved")
+                is not True
+            ):
+                raise KernelCtlError(
+                    "package metadata does not confirm "
+                    "raw kernel-family preservation"
+                )
+
+            provider = metadata.get("signing_provider")
+
+            if provider not in ("aosp", "treeforge"):
+                raise KernelCtlError(
+                    "unsupported package signing provider: "
+                    f"{provider}"
+                )
+
+            artifacts = metadata.get("artifacts")
+
+            if not isinstance(artifacts, dict):
+                raise KernelCtlError(
+                    "package artifact metadata missing"
+                )
+
+            print()
+            print("Verified package integrity")
+            print("--------------------------")
+
+            for name in FINAL_FLASH_PACKAGE_IMAGES:
+                image = package / name
+                need_file(image)
+
+                if image.is_symlink():
+                    raise KernelCtlError(
+                        f"refusing symlinked flash image: {image}"
+                    )
+
+                entry = artifacts.get(name)
+
+                if not isinstance(entry, dict):
+                    raise KernelCtlError(
+                        f"metadata missing artifact: {name}"
+                    )
+
+                expected_size = entry.get("size")
+                expected_sha256 = entry.get("sha256")
+
+                actual_size = image.stat().st_size
+                actual_sha256 = file_sha256(image)
+
+                if expected_size != actual_size:
+                    raise KernelCtlError(
+                        f"{name}: size mismatch:\n"
+                        f"  metadata={expected_size}\n"
+                        f"  actual={actual_size}"
+                    )
+
+                if expected_sha256 != actual_sha256:
+                    raise KernelCtlError(
+                        f"{name}: SHA256 mismatch:\n"
+                        f"  metadata={expected_sha256}\n"
+                        f"  actual={actual_sha256}"
+                    )
+
+                print(
+                    f"PASS  {name:<24} "
+                    f"{actual_size:>10} bytes  "
+                    f"{actual_sha256}"
+                )
+
+            signed_nodes = metadata.get(
+                "signing_nodes"
+            )
+
+            if not isinstance(signed_nodes, dict):
+                raise KernelCtlError(
+                    "signed-node metadata missing"
+                )
+
+            expected_algorithms = {
+                "boot": "SHA256_RSA2048",
+                "init_boot": "SHA256_RSA2048",
+                "vbmeta_system": "SHA256_RSA2048",
+                "vbmeta_vendor": "SHA256_RSA2048",
+                "vbmeta": "SHA256_RSA4096",
+            }
+
+            for name, expected_algorithm in (
+                expected_algorithms.items()
+            ):
+                entry = signed_nodes.get(name)
+
+                if not isinstance(entry, dict):
+                    raise KernelCtlError(
+                        f"missing signed node: {name}"
+                    )
+
+                actual_algorithm = entry.get(
+                    "algorithm"
+                )
+
+                if actual_algorithm != expected_algorithm:
+                    raise KernelCtlError(
+                        f"{name}: signing algorithm mismatch: "
+                        f"{actual_algorithm}"
+                    )
+
+            if provider == "aosp":
+                child_sha1 = (
+                    "cdbb77177f731920bbe0a0f94f84d9038ae0617d"
+                )
+
+                root_sha1 = (
+                    "2597c218aae470a130f61162feaae70afd97f011"
+                )
+
+                for name in (
+                    "boot",
+                    "init_boot",
+                    "vbmeta_system",
+                    "vbmeta_vendor",
+                ):
+                    actual = (
+                        signed_nodes[name]
+                        .get("public_key_sha1")
+                    )
+
+                    if actual != child_sha1:
+                        raise KernelCtlError(
+                            f"{name}: AOSP child-key identity "
+                            f"mismatch: {actual}"
+                        )
+
+                actual_root = (
+                    signed_nodes["vbmeta"]
+                    .get("public_key_sha1")
+                )
+
+                if actual_root != root_sha1:
+                    raise KernelCtlError(
+                        "vbmeta: AOSP root-key identity "
+                        f"mismatch: {actual_root}"
+                    )
+
+            return generation, package, metadata
+
+        except (
+            KernelCtlError,
+            json.JSONDecodeError,
+            OSError,
+        ) as error:
+            last_error = error
+
+            if requested:
+                raise
+
+    raise KernelCtlError(
+        "no valid verified-boot package found"
+        + (
+            f": {last_error}"
+            if last_error is not None
+            else ""
+        )
+    )
+
+
+def print_verified_flash_plan(
+    generation: Path,
+    package: Path,
+    metadata: dict,
+    *,
+    slot: str | None,
+    active: str,
+    reboot: bool,
+) -> None:
+    print()
+    print("TreeForge Kernel Flash")
+    print("======================")
+    print()
+    print(f"Generation:       {generation}")
+    print(f"Package:          {package}")
+    print(
+        "Signing provider:"
+        f" {metadata.get('signing_provider')}"
+    )
+    print(
+        "Package stage:   "
+        f" {metadata.get('stage')}"
+    )
+    print("Images:           10/10 verified")
+    print()
+
+    if slot is None:
+        print("Target slot:      interactive")
+    elif slot == "both":
+        print("Target slot:      A + B")
+    else:
+        print(f"Target slot:      {slot.upper()}")
+
+    print(f"Active after:     {active}")
+    print(
+        "Reboot Android:   "
+        f"{'YES' if reboot else 'NO'}"
+    )
+
+
+def flash_command(argv) -> int:
+    parser = argparse.ArgumentParser(
+        prog="kernelctl flash",
+        description=(
+            "Flash a verified TreeForge kernel package"
+        ),
+    )
+
+    parser.add_argument(
+        "--generation",
+        help=(
+            "generation timestamp/path; "
+            "default: newest accepted package"
+        ),
+    )
+
+    parser.add_argument(
+        "--slot",
+        choices=("a", "b", "both"),
+        help=(
+            "slot to flash; omit for interactive choice"
+        ),
+    )
+
+    parser.add_argument(
+        "--active",
+        choices=("keep", "a", "b"),
+        default="keep",
+        help=(
+            "active slot after flashing; default: keep"
+        ),
+    )
+
+    parser.add_argument(
+        "--reboot",
+        action="store_true",
+        help=(
+            "reboot Android after successful flash; "
+            "default: leave in bootloader"
+        ),
+    )
+
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help=(
+            "validate package and print flash plan "
+            "without invoking ADB/Fastboot"
+        ),
+    )
+
+    args = parser.parse_args(argv)
+
+    generation, package, metadata = (
+        resolve_flash_generation(
+            args.generation
+        )
+    )
+
+    print_verified_flash_plan(
+        generation,
+        package,
+        metadata,
+        slot=args.slot,
+        active=args.active,
+        reboot=args.reboot,
+    )
+
+    if args.plan_only:
+        print()
+        print("Execution")
+        print("---------")
+        print("FLASH STARTED: NO")
+        print("ADB INVOKED: NO")
+        print("FASTBOOT INVOKED: NO")
+        print("DEVICE MODIFIED: NO")
+        return 0
+
+    #
+    # Only after the complete package has passed integrity
+    # validation do we prepare the exact TreeForge ADB/Fastboot
+    # providers.
+    #
+    prepare_flash_host_tools()
+
+    slot = args.slot
+
+    if slot is None:
+        slot = choose(
+            "Flash target slot:",
+            [
+                ("Slot A", "a"),
+                ("Slot B", "b"),
+                ("Both slots A + B", "both"),
+            ],
+        )
+
+        active = choose(
+            "Active slot after flashing:",
+            [
+                (
+                    "Keep current active slot",
+                    "keep",
+                ),
+                ("Set slot A active", "a"),
+                ("Set slot B active", "b"),
+            ],
+        )
+
+        reboot = choose(
+            "Reboot Android after flashing?",
+            [
+                (
+                    "No - leave in bootloader",
+                    False,
+                ),
+                ("Yes", True),
+            ],
+        )
+    else:
+        active = args.active
+        reboot = args.reboot
+
+    #
+    # flash() retains the explicit final:
+    #
+    #   Proceed with flash? [y/N]
+    #
+    # confirmation before touching the device.
+    #
+    flash(
+        package,
+        slot,
+        active,
+        reboot,
+    )
+
+    return 0
+
 
 
 def detect_transport():
@@ -2231,6 +3853,16 @@ def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "build":
         try:
             return build_command(sys.argv[2:])
+        except KeyboardInterrupt:
+            print("\nCancelled.")
+            return 130
+        except KernelCtlError as error:
+            print(f"\nERROR: {error}", file=sys.stderr)
+            return 1
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "flash":
+        try:
+            return flash_command(sys.argv[2:])
         except KeyboardInterrupt:
             print("\nCancelled.")
             return 130
