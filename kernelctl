@@ -11,10 +11,11 @@ import shutil
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-ROOT = Path("/home/skelitonlord/development/treeforge_kernel")
+ROOT = Path(__file__).resolve().parent
 TREEFORGE = Path("/home/skelitonlord/development/treeforge")
 AOSP = TREEFORGE / "aosp"
 
@@ -51,6 +52,24 @@ TREEFORGE_TOOLS_CONTRACT = (
     KERNEL_PROVIDER_CACHE
     / "treeforge-tools.json"
 )
+
+
+
+SETUP_MANIFEST_NAME = "manifests/tangorpro-android15-r094.xml"
+
+SETUP_SOURCE_LOCK = (
+    ROOT
+    / "provenance"
+    / "google"
+    / "android-15.0.0_r0.94"
+    / "SOURCE_LOCK.json"
+)
+
+SETUP_MANIFEST_URL = (
+    "git@github.com:TreeForgeDEV/treeforge_kernel.git"
+)
+
+SETUP_MANIFEST_BRANCH = "development"
 
 
 class KernelCtlError(RuntimeError):
@@ -1656,7 +1675,559 @@ def interactive():
     flash(stage, slot, active, reboot)
 
 
+
+def setup_run(args, *, cwd: Path):
+    print("+", " ".join(str(value) for value in args))
+
+    result = subprocess.run(
+        [str(value) for value in args],
+        cwd=str(cwd),
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise KernelCtlError(
+            f"command failed ({result.returncode}): "
+            + " ".join(str(value) for value in args)
+        )
+
+    return result
+
+
+def setup_definition(root: Path) -> tuple[dict, list[dict]]:
+    lock_path = (
+        root
+        / "provenance"
+        / "google"
+        / KERNEL_PROVIDER_RELEASE
+        / "SOURCE_LOCK.json"
+    )
+
+    manifest_path = root / SETUP_MANIFEST_NAME
+
+    if not lock_path.is_file():
+        raise KernelCtlError(
+            f"source lock missing: {lock_path}"
+        )
+
+    if not manifest_path.is_file():
+        raise KernelCtlError(
+            f"source manifest missing: {manifest_path}"
+        )
+
+    lock = json.loads(
+        lock_path.read_text(encoding="utf-8")
+    )
+
+    if lock.get("schema") != 1:
+        raise KernelCtlError(
+            "unsupported setup source-lock schema"
+        )
+
+    if lock.get("device") != DEVICE:
+        raise KernelCtlError(
+            "setup source-lock device mismatch"
+        )
+
+    if lock.get("kernel_release") != KERNEL_PROVIDER_RELEASE:
+        raise KernelCtlError(
+            "setup source-lock release mismatch"
+        )
+
+    locked = lock.get("projects")
+
+    if not isinstance(locked, dict) or len(locked) != 73:
+        raise KernelCtlError(
+            "setup source lock must contain exactly 73 projects"
+        )
+
+    excluded = lock.get("excluded_google_prebuilts")
+
+    if not isinstance(excluded, list) or len(excluded) != 7:
+        raise KernelCtlError(
+            "setup source lock must exclude exactly 7 Google "
+            "prebuilt projects"
+        )
+
+    required_excluded = (
+        "platform/prebuilts/gcc/linux-x86/host/"
+        "x86_64-linux-glibc2.17-4.8"
+    )
+
+    if required_excluded not in excluded:
+        raise KernelCtlError(
+            "GCC/glibc project missing from excluded provider set"
+        )
+
+    xml_root = ET.parse(manifest_path).getroot()
+    projects = []
+
+    for project in xml_root.findall("project"):
+        record = dict(project.attrib)
+
+        path = record.get("path")
+        name = record.get("name")
+        revision = record.get("revision")
+
+        if not path or not name:
+            raise KernelCtlError(
+                "source manifest contains project without path/name"
+            )
+
+        if re.fullmatch(r"[0-9a-f]{40}", revision or "") is None:
+            raise KernelCtlError(
+                f"source manifest is not SHA pinned: {path}"
+            )
+
+        expected = locked.get(path)
+
+        if not isinstance(expected, dict):
+            raise KernelCtlError(
+                f"source manifest path absent from lock: {path}"
+            )
+
+        if expected.get("name") != name:
+            raise KernelCtlError(
+                f"source manifest name mismatch: {path}"
+            )
+
+        if expected.get("revision") != revision:
+            raise KernelCtlError(
+                f"source manifest revision mismatch: {path}"
+            )
+
+        if record.get("clone-depth") != "1":
+            raise KernelCtlError(
+                f"source manifest is not depth-1: {path}"
+            )
+
+        projects.append(record)
+
+    if len(projects) != 73:
+        raise KernelCtlError(
+            f"source manifest must contain 73 projects, "
+            f"found {len(projects)}"
+        )
+
+    return lock, projects
+
+
+def setup_provider_definition(root: Path) -> dict:
+    path = (
+        root
+        / "tools"
+        / "treeforge"
+        / "providers"
+        / "manifests"
+        / "kernel"
+        / KERNEL_PROVIDER_RELEASE
+        / "google-providers.json"
+    )
+
+    if not path.is_file():
+        raise KernelCtlError(
+            f"kernel provider manifest missing: {path}"
+        )
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    providers = data.get("providers")
+
+    if not isinstance(providers, dict):
+        raise KernelCtlError(
+            "kernel provider manifest is invalid"
+        )
+
+    if len(providers) != 7:
+        raise KernelCtlError(
+            f"expected 7 kernel build providers, "
+            f"found {len(providers)}"
+        )
+
+    gcc = providers.get("gcc-glibc")
+
+    expected_path = (
+        "prebuilts/gcc/linux-x86/host/"
+        "x86_64-linux-glibc2.17-4.8"
+    )
+
+    if (
+        not isinstance(gcc, dict)
+        or gcc.get("workspace_path") != expected_path
+        or gcc.get("revision")
+        != "f6d40532273c8bd628b960ecc0970c7294c8d891"
+    ):
+        raise KernelCtlError(
+            "GCC/glibc provider contract is incomplete"
+        )
+
+    return data
+
+
+def verify_setup_checkout(
+    destination: Path,
+    lock: dict,
+) -> None:
+    mismatches = []
+
+    for path, record in sorted(lock["projects"].items()):
+        project = destination / path
+
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(project),
+                "rev-parse",
+                "HEAD",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        actual = result.stdout.strip()
+
+        if (
+            result.returncode != 0
+            or actual != record["revision"]
+        ):
+            mismatches.append(
+                (
+                    path,
+                    record["revision"],
+                    actual or "<unavailable>",
+                )
+            )
+
+    if mismatches:
+        sample = "\n".join(
+            f"  {path}\n"
+            f"    expected={expected}\n"
+            f"    actual={actual}"
+            for path, expected, actual in mismatches[:10]
+        )
+
+        raise KernelCtlError(
+            "fresh source checkout does not match SOURCE_LOCK:\n"
+            + sample
+        )
+
+
+def setup_command(argv) -> int:
+    parser = argparse.ArgumentParser(
+        prog="kernelctl setup",
+        description=(
+            "reconstruct the pinned TreeForge Tangorpro "
+            "kernel workspace"
+        ),
+    )
+
+    parser.add_argument(
+        "--destination",
+        type=Path,
+        help=(
+            "workspace destination; default is this "
+            "treeforge_kernel checkout"
+        ),
+    )
+
+    parser.add_argument(
+        "--manifest-url",
+        default=SETUP_MANIFEST_URL,
+        help="TreeForge kernel manifest/superproject repository",
+    )
+
+    parser.add_argument(
+        "--manifest-branch",
+        default=SETUP_MANIFEST_BRANCH,
+        help="TreeForge manifest branch",
+    )
+
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=4,
+        help="repo sync parallelism",
+    )
+
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="validate and print the setup plan without syncing",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.jobs < 1:
+        raise KernelCtlError("--jobs must be at least 1")
+
+    destination = (
+        args.destination.expanduser().resolve()
+        if args.destination is not None
+        else ROOT.resolve()
+    )
+
+    lock, projects = setup_definition(ROOT)
+    provider_data = setup_provider_definition(ROOT)
+
+    print("TreeForge Kernel Setup")
+    print("======================")
+    print()
+    print(f"Source checkout:     {ROOT}")
+    print(f"Destination:         {destination}")
+    print(f"Manifest repository:{' '}{args.manifest_url}")
+    print(f"Manifest branch:     {args.manifest_branch}")
+    print(f"Manifest:            {SETUP_MANIFEST_NAME}")
+    print(f"Kernel release:      {KERNEL_PROVIDER_RELEASE}")
+    print(f"Source projects:     {len(projects)}")
+    print(
+        f"Build providers:     "
+        f"{len(provider_data['providers'])}"
+    )
+    print("Clone depth:         1")
+    print("Project revisions:   exact SHA")
+    print("Google tags:         not synced")
+    print()
+
+    print("Excluded Google prebuilt projects")
+    print("---------------------------------")
+    for name in sorted(lock["excluded_google_prebuilts"]):
+        print(f"  {name}")
+
+    print()
+
+    if args.plan_only:
+        print("PLAN ONLY: YES")
+        print("SYNC STARTED: NO")
+        print("BUILD STARTED: NO")
+        print("DEVICE MODIFIED: NO")
+        return 0
+
+    if destination == ROOT.resolve():
+        if (destination / ".repo").exists():
+            raise KernelCtlError(
+                "this checkout already contains .repo; "
+                "use --destination for fresh reconstruction "
+                "acceptance"
+            )
+    else:
+        if destination.exists():
+            entries = list(destination.iterdir())
+
+            if entries:
+                raise KernelCtlError(
+                    f"destination is not empty: {destination}"
+                )
+        else:
+            destination.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+        setup_run(
+            [
+                "git",
+                "clone",
+                "--branch",
+                args.manifest_branch,
+                "--single-branch",
+                args.manifest_url,
+                destination,
+            ],
+            cwd=destination.parent,
+        )
+
+        destination_lock, _ = setup_definition(destination)
+
+        if destination_lock["projects"] != lock["projects"]:
+            raise KernelCtlError(
+                "fresh TreeForge clone source lock differs "
+                "from invoking checkout"
+            )
+
+        setup_provider_definition(destination)
+
+    repo = need_command("repo")
+
+    setup_run(
+        [
+            repo,
+            "init",
+            "-u",
+            args.manifest_url,
+            "-b",
+            args.manifest_branch,
+            "-m",
+            SETUP_MANIFEST_NAME,
+            "--depth=1",
+        ],
+        cwd=destination,
+    )
+
+    setup_run(
+        [
+            repo,
+            "sync",
+            "-c",
+            "--no-tags",
+            "--fail-fast",
+            f"-j{args.jobs}",
+        ],
+        cwd=destination,
+    )
+
+    verify_setup_checkout(destination, lock)
+
+    provider_root = (
+        destination
+        / "tools"
+        / "treeforge"
+        / "providers"
+    )
+
+    cache = (
+        provider_root
+        / "scripts"
+        / "kernel-provider-cache"
+    )
+
+    materialize = (
+        provider_root
+        / "scripts"
+        / "kernel-provider-materialize"
+    )
+
+    treeforge_tools = (
+        provider_root
+        / "scripts"
+        / "kernel-treeforge-tools"
+    )
+
+    for required in (cache, materialize, treeforge_tools):
+        if not required.is_file():
+            raise KernelCtlError(
+                f"provider helper missing: {required}"
+            )
+
+    print()
+    print("Preparing kernel build providers")
+    print("--------------------------------")
+
+    setup_run(
+        [
+            cache,
+            "--release",
+            KERNEL_PROVIDER_RELEASE,
+            "fetch",
+            "all",
+        ],
+        cwd=destination,
+    )
+
+    setup_run(
+        [
+            cache,
+            "--release",
+            KERNEL_PROVIDER_RELEASE,
+            "verify",
+            "all",
+        ],
+        cwd=destination,
+    )
+
+    setup_run(
+        [
+            materialize,
+            "--release",
+            KERNEL_PROVIDER_RELEASE,
+            "--workspace",
+            destination,
+            "materialize",
+        ],
+        cwd=destination,
+    )
+
+    setup_run(
+        [
+            materialize,
+            "--release",
+            KERNEL_PROVIDER_RELEASE,
+            "--workspace",
+            destination,
+            "status",
+        ],
+        cwd=destination,
+    )
+
+    setup_run(
+        [
+            treeforge_tools,
+            "prepare",
+        ],
+        cwd=destination,
+    )
+
+    setup_run(
+        [
+            treeforge_tools,
+            "verify",
+        ],
+        cwd=destination,
+    )
+
+    gcc_path = (
+        destination
+        / "prebuilts"
+        / "gcc"
+        / "linux-x86"
+        / "host"
+        / "x86_64-linux-glibc2.17-4.8"
+    )
+
+    if not gcc_path.exists():
+        raise KernelCtlError(
+            f"GCC/glibc provider was not materialized: {gcc_path}"
+        )
+
+    print()
+    print("Fresh source identity")
+    print("---------------------")
+    print("Projects verified: 73/73")
+    print("Providers ready:   7/7")
+    print()
+
+    subprocess.run(
+        ["du", "-sh", str(destination)],
+        text=True,
+        check=False,
+    )
+
+    subprocess.run(
+        ["du", "-sh", str(destination / ".repo")],
+        text=True,
+        check=False,
+    )
+
+    print()
+    print("TreeForge kernel setup complete.")
+    print("BUILD STARTED: NO")
+    print("DEVICE MODIFIED: NO")
+
+    return 0
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "setup":
+        try:
+            return setup_command(sys.argv[2:])
+        except KeyboardInterrupt:
+            print("\nCancelled.")
+            return 130
+        except KernelCtlError as error:
+            print(f"\nERROR: {error}", file=sys.stderr)
+            return 1
+
     if len(sys.argv) >= 2 and sys.argv[1] == "build":
         try:
             return build_command(sys.argv[2:])

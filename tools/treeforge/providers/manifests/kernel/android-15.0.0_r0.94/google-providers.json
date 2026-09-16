@@ -1,68 +1,75 @@
 {
-  "schema": 1,
   "family": "kernel-build-providers",
-  "platform_release": "android-15.0.0_r0.94",
   "host": {
-    "os": "linux",
-    "architecture": "x86_64"
+    "architecture": "x86_64",
+    "os": "linux"
   },
+  "platform_release": "android-15.0.0_r0.94",
   "policy": {
     "acquisition": "google-upstream",
     "cache": "local-verified",
     "git_lfs_required": false,
-    "treeforge_binary_mirror_required": false,
-    "replace_google_build_system": false
+    "replace_google_build_system": false,
+    "treeforge_binary_mirror_required": false
   },
   "providers": {
     "bazel": {
       "project": "platform/prebuilts/bazel/linux-x86_64",
-      "url": "https://android.googlesource.com/platform/prebuilts/bazel/linux-x86_64",
       "revision": "7bfbec9e829bbae6816d5f39aba345df76e627c1",
       "tag": "android-15.0.0_r0.94",
+      "url": "https://android.googlesource.com/platform/prebuilts/bazel/linux-x86_64",
       "workspace_path": "prebuilts/bazel/linux-x86_64"
-    },
-    "jdk11": {
-      "project": "platform/prebuilts/jdk/jdk11",
-      "url": "https://android.googlesource.com/platform/prebuilts/jdk/jdk11",
-      "revision": "649eec4416e2ed6298af49a56876772767a0e5ae",
-      "tag": "android-15.0.0_r0.94",
-      "workspace_path": "prebuilts/jdk/jdk11"
     },
     "clang": {
       "project": "platform/prebuilts/clang/host/linux-x86",
-      "url": "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86",
       "revision": "7775eb113f960bc69a780b621d03a715914d4bca",
       "tag": "android-15.0.0_r0.94",
       "toolchain": "clang-r487747c",
+      "url": "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86",
       "workspace_path": "prebuilts/clang/host/linux-x86"
     },
-    "platform-build-tools": {
-      "project": "platform/prebuilts/build-tools",
-      "url": "https://android.googlesource.com/platform/prebuilts/build-tools",
-      "revision": "c181f690fe9b76142b3203c2ab959b6299d4d1fd",
+    "gcc-glibc": {
+      "project": "platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8",
+      "revision": "f6d40532273c8bd628b960ecc0970c7294c8d891",
       "tag": "android-15.0.0_r0.94",
-      "workspace_path": "prebuilts/build-tools"
+      "url": "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8",
+      "workspace_path": "prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8"
+    },
+    "jdk11": {
+      "project": "platform/prebuilts/jdk/jdk11",
+      "revision": "649eec4416e2ed6298af49a56876772767a0e5ae",
+      "tag": "android-15.0.0_r0.94",
+      "url": "https://android.googlesource.com/platform/prebuilts/jdk/jdk11",
+      "workspace_path": "prebuilts/jdk/jdk11"
     },
     "kernel-build-tools": {
       "project": "kernel/prebuilts/build-tools",
-      "url": "https://android.googlesource.com/kernel/prebuilts/build-tools",
       "revision": "e905be252a53d20c52bd9e59df3ff8fdd46b9eab",
       "tag": "android-15.0.0_r0.94",
+      "url": "https://android.googlesource.com/kernel/prebuilts/build-tools",
       "workspace_path": "prebuilts/kernel-build-tools"
     },
     "ndk-r23": {
       "project": "toolchain/prebuilts/ndk/r23",
-      "url": "https://android.googlesource.com/toolchain/prebuilts/ndk/r23",
       "revision": "19ac7e4eded12adb99d4f613490dde6dd0e72664",
       "tag": "android-15.0.0_r0.94",
+      "url": "https://android.googlesource.com/toolchain/prebuilts/ndk/r23",
       "workspace_path": "prebuilts/ndk-r23"
+    },
+    "platform-build-tools": {
+      "project": "platform/prebuilts/build-tools",
+      "revision": "c181f690fe9b76142b3203c2ab959b6299d4d1fd",
+      "tag": "android-15.0.0_r0.94",
+      "url": "https://android.googlesource.com/platform/prebuilts/build-tools",
+      "workspace_path": "prebuilts/build-tools"
     }
   },
+  "schema": 1,
   "treeforge_tools": {
+    "adb": "treeforge-adb",
+    "avb": "avbtool",
     "boot_image_builder": "android-image-tools:mkbootimg",
     "boot_image_inspector": "android-image-tools:unpack_bootimg",
-    "avb": "avbtool",
-    "adb": "treeforge-adb",
     "fastboot": "treeforge-fastboot"
   }
 }

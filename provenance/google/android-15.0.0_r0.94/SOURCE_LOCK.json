@@ -1,0 +1,312 @@
+{
+  "device": "tangorpro",
+  "excluded_google_prebuilts": [
+    "kernel/prebuilts/build-tools",
+    "platform/prebuilts/bazel/linux-x86_64",
+    "platform/prebuilts/build-tools",
+    "platform/prebuilts/clang/host/linux-x86",
+    "platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8",
+    "platform/prebuilts/jdk/jdk11",
+    "toolchain/prebuilts/ndk/r23"
+  ],
+  "kernel_release": "android-15.0.0_r0.94",
+  "manifest": "manifests/tangorpro-android15-r094.xml",
+  "projects": {
+    "aosp": {
+      "name": "kernel/common",
+      "revision": "c151586fe27836b2993f431368f2c314a193afdb"
+    },
+    "build/bazel_common_rules": {
+      "name": "platform/build/bazel_common_rules",
+      "revision": "b4f0919269ec78d28ec32a34ca90e107c3a41f4e"
+    },
+    "build/kernel": {
+      "name": "kernel/build",
+      "revision": "560e3751ab4d1d96e0db51e860f6437b41786c28"
+    },
+    "external/bazel-skylib": {
+      "name": "platform/external/bazel-skylib",
+      "revision": "f998e5dc13c03f0eae9e373263d3afff0932c738"
+    },
+    "external/python/absl-py": {
+      "name": "platform/external/python/absl-py",
+      "revision": "2f199605a9875340569e039657f8b4c72d51b84d"
+    },
+    "external/stardoc": {
+      "name": "platform/external/stardoc",
+      "revision": "e83f522ee95419e55d2c5654aa6e0143beeef595"
+    },
+    "kernel/configs": {
+      "name": "kernel/configs",
+      "revision": "0950b8c2d3f35199d3f103d107d6225dc97ced6f"
+    },
+    "private/devices/google/akita": {
+      "name": "kernel/devices/google/akita",
+      "revision": "46bfef88ef4203529991bdc9dc44aa893cdf1864"
+    },
+    "private/devices/google/bluejay": {
+      "name": "kernel/devices/google/bluejay",
+      "revision": "e59c03152b04900fbfbfe1694b9925ada2e788c7"
+    },
+    "private/devices/google/caimito": {
+      "name": "kernel/devices/google/caimito",
+      "revision": "06b9774a93c77f20deaeb6e1e4619b4139c988b7"
+    },
+    "private/devices/google/comet": {
+      "name": "kernel/devices/google/comet",
+      "revision": "54b531563295694ced69c0536cb79510b1be5a51"
+    },
+    "private/devices/google/common": {
+      "name": "kernel/devices/google/common",
+      "revision": "ffd9674c792af4a478d44a362201f9de6e65de64"
+    },
+    "private/devices/google/felix": {
+      "name": "kernel/devices/google/felix",
+      "revision": "ce6f1fabb0bebdcd057b3c0698c2b99e9d0aaa8d"
+    },
+    "private/devices/google/gs101": {
+      "name": "kernel/devices/google/gs101",
+      "revision": "e1f98a0825d1e988652e23aada1388eb93652a38"
+    },
+    "private/devices/google/gs201": {
+      "name": "kernel/devices/google/gs201",
+      "revision": "5073cf65f352ddaba705fcbdf09c5f99b10d3acc"
+    },
+    "private/devices/google/lynx": {
+      "name": "kernel/devices/google/lynx",
+      "revision": "97d9691fed802e78e07fb0778ca38f21841657fe"
+    },
+    "private/devices/google/pantah": {
+      "name": "kernel/devices/google/pantah",
+      "revision": "ab0a41c7c808baa23947035bb700c0f31bd90263"
+    },
+    "private/devices/google/raviole": {
+      "name": "kernel/devices/google/raviole",
+      "revision": "7c8375f39def533b9ab0ca8acfee7e85d11fa635"
+    },
+    "private/devices/google/shusky": {
+      "name": "kernel/devices/google/shusky",
+      "revision": "12ea0513808e5bcc194621c1811bdc2769b8837c"
+    },
+    "private/devices/google/tangorpro": {
+      "name": "kernel/devices/google/tangorpro",
+      "revision": "4e9c3e4afddf64b3f8dcd26bab68861643a5de31"
+    },
+    "private/devices/google/zuma": {
+      "name": "kernel/devices/google/zuma",
+      "revision": "b258b4794338ed19f44ee4e09174024eed22a59a"
+    },
+    "private/devices/google/zumapro": {
+      "name": "kernel/devices/google/zumapro",
+      "revision": "f239f1eb9dc2bc0031a253f6048f20fe47db050b"
+    },
+    "private/google-modules/amplifiers": {
+      "name": "kernel/google-modules/amplifiers",
+      "revision": "5e796c628103210e63c36269762fb14383fe729e"
+    },
+    "private/google-modules/aoc": {
+      "name": "kernel/google-modules/aoc",
+      "revision": "c81c2548158a1c0b5e81a2734bdc67d57bc407ae"
+    },
+    "private/google-modules/aoc_ipc": {
+      "name": "kernel/google-modules/aoc-ipc",
+      "revision": "d79e45ae6a589ca43f7699709c3e2b72a3b727a2"
+    },
+    "private/google-modules/bluetooth/broadcom": {
+      "name": "kernel/google-modules/bluetooth/broadcom",
+      "revision": "0faa83f1328479c07f3703ff9a5b63021f2efdb7"
+    },
+    "private/google-modules/bluetooth/qcom": {
+      "name": "kernel/google-modules/bluetooth/qcom",
+      "revision": "b709d07e75c4c1c14ae656f484f435ec51c21e07"
+    },
+    "private/google-modules/bluetooth/synaptics": {
+      "name": "kernel/google-modules/bluetooth/synaptics",
+      "revision": "000d645fe7b623c747e56b24cd793ccd430c463f"
+    },
+    "private/google-modules/bms": {
+      "name": "kernel/google-modules/bms",
+      "revision": "38791c5c2da3c9e2b6cbfa24a3a8c9abecf02d0e"
+    },
+    "private/google-modules/display/common": {
+      "name": "kernel/google-modules/display/common",
+      "revision": "38a2ee3cca85dcc44da9bdb4bd417e246d13da2a"
+    },
+    "private/google-modules/display/panels/caimito": {
+      "name": "kernel/google-modules/display/panels/caimito",
+      "revision": "bcb86b07508d7ff47d3dbc7484963601cf5239a4"
+    },
+    "private/google-modules/display/samsung": {
+      "name": "kernel/google-modules/display/samsung",
+      "revision": "eca5bb885b2b97a84e9ab517703f29fc92fc7db3"
+    },
+    "private/google-modules/edgetpu/abrolhos": {
+      "name": "kernel/google-modules/edgetpu/abrolhos",
+      "revision": "c494121e321ce09b35a41f0045f61fdeb213ad39"
+    },
+    "private/google-modules/edgetpu/janeiro": {
+      "name": "kernel/google-modules/edgetpu/janeiro",
+      "revision": "888bc197145e20f19a5304594f1254e740211dca"
+    },
+    "private/google-modules/edgetpu/rio": {
+      "name": "kernel/google-modules/edgetpu/rio",
+      "revision": "60fadb3dae41ddb032768567230f248cc852a239"
+    },
+    "private/google-modules/fingerprint/fpc": {
+      "name": "kernel/google-modules/fingerprint/fpc",
+      "revision": "4cb7ddd04fd10083a44d6afee272b725a030372a"
+    },
+    "private/google-modules/fingerprint/qcom/qfs4008": {
+      "name": "kernel/google-modules/fingerprint/qcom/qfs4008",
+      "revision": "e9e3ea007a0741fd5d478530f9044a3ab82cb106"
+    },
+    "private/google-modules/gps/broadcom/bcm47765": {
+      "name": "kernel/google-modules/gps/broadcom/bcm47765",
+      "revision": "97f132262180a4c3da26fdb7dd208580621ada17"
+    },
+    "private/google-modules/gpu": {
+      "name": "kernel/google-modules/gpu",
+      "revision": "68b2e4f2671f41c7b4f86750ebc1ba2bb2374f4d"
+    },
+    "private/google-modules/gxp/gs201": {
+      "name": "kernel/google-modules/gxp/gs201",
+      "revision": "7d0518b06103d1986530cd3c1fb471e2f63e96c2"
+    },
+    "private/google-modules/gxp/zuma": {
+      "name": "kernel/google-modules/gxp/zuma",
+      "revision": "77f61f7bbbaaaa5a1214860a0d50165cc3045a52"
+    },
+    "private/google-modules/hdcp/samsung": {
+      "name": "kernel/google-modules/hdcp/samsung",
+      "revision": "875a482fe750576added1d1fd6eb6a0b943ebb83"
+    },
+    "private/google-modules/lwis": {
+      "name": "kernel/google-modules/lwis",
+      "revision": "ee5b025380d172e3e03fd4a1923585fac81c042a"
+    },
+    "private/google-modules/misc": {
+      "name": "kernel/google-modules/misc",
+      "revision": "e840c82d7b8ec49f308c10987c3103defdfb78fd"
+    },
+    "private/google-modules/nfc": {
+      "name": "kernel/google-modules/nfc",
+      "revision": "6b00f72b499f512b87bd06c9efab7dfd3297ba16"
+    },
+    "private/google-modules/perf": {
+      "name": "kernel/google-modules/perf",
+      "revision": "7de380977283cc556eb6d00f68acb45f34c37eab"
+    },
+    "private/google-modules/power/mitigation": {
+      "name": "kernel/google-modules/power/mitigation",
+      "revision": "47ddf272507a67f2f2807568294cb21c41799824"
+    },
+    "private/google-modules/power/reset": {
+      "name": "kernel/google-modules/power/reset",
+      "revision": "c8c87dd61758b207ee2b7f973cfa0aa0584b867c"
+    },
+    "private/google-modules/radio/samsung/s5300": {
+      "name": "kernel/google-modules/radio/samsung/s5300",
+      "revision": "9b16eed8389000007beeda150acdea975521e1f7"
+    },
+    "private/google-modules/radio/samsung/s5400": {
+      "name": "kernel/google-modules/radio/samsung/s5400",
+      "revision": "7461de0f4af7bb40741137e49e59b038fa5716cf"
+    },
+    "private/google-modules/sensors/hall_sensor": {
+      "name": "kernel/google-modules/sensors/hall_sensor",
+      "revision": "614e20de37f9d3c4a31db83216b5f87fa88d858e"
+    },
+    "private/google-modules/soc/gs": {
+      "name": "kernel/google-modules/soc/gs",
+      "revision": "4d1f0591dfb6cacc79264bbaf6f098dab8cdfb25"
+    },
+    "private/google-modules/touch/common": {
+      "name": "kernel/google-modules/touch/common",
+      "revision": "faab3479c4f2cd016f4ad790dd4c943f54a4b35d"
+    },
+    "private/google-modules/touch/focaltech": {
+      "name": "kernel/google-modules/touch/focaltech_touch",
+      "revision": "a93b483cb717cab1f84cb023d7c349d80db5baf5"
+    },
+    "private/google-modules/touch/fts": {
+      "name": "kernel/google-modules/touch/fts_touch",
+      "revision": "18f44fca40156b5acf95c0361421dce34bfcc654"
+    },
+    "private/google-modules/touch/goodix": {
+      "name": "kernel/google-modules/touch/goodix_touch",
+      "revision": "4856ad358867cbe585d2eb29f6d9b1fabd2b546b"
+    },
+    "private/google-modules/touch/novatek": {
+      "name": "kernel/google-modules/touch/novatek_touch",
+      "revision": "9be848bf3f78994df2f354b4aa52990b18a90aba"
+    },
+    "private/google-modules/touch/sec": {
+      "name": "kernel/google-modules/touch/sec_touch",
+      "revision": "5a35e03f990eb5405bc600857ae5da412207eba6"
+    },
+    "private/google-modules/touch/synaptics": {
+      "name": "kernel/google-modules/touch/synaptics_touch",
+      "revision": "6110f445d99aa5d196c40c49e7e2d27c6c18b126"
+    },
+    "private/google-modules/trusty": {
+      "name": "kernel/google-modules/trusty",
+      "revision": "fd75565ac4192155741d8a37511f6e17e2fae392"
+    },
+    "private/google-modules/typec": {
+      "name": "kernel/google-modules/typec",
+      "revision": "f59d534ce10837287afd8af6261f5926863cac80"
+    },
+    "private/google-modules/uwb/qorvo/dw3000": {
+      "name": "kernel/google-modules/uwb/qorvo/dw3000",
+      "revision": "8dda33c2283e22949951d9d96f63daf51f082636"
+    },
+    "private/google-modules/uwb/qorvo/qm35": {
+      "name": "kernel/google-modules/uwb/qorvo/qm35",
+      "revision": "dc84a8c7861eb591f02b5156081abe01fab636ca"
+    },
+    "private/google-modules/video/gchips": {
+      "name": "kernel/google-modules/video/gchips",
+      "revision": "693aab624fbaaa6962864642550421963276791c"
+    },
+    "private/google-modules/wlan/bcm4383": {
+      "name": "kernel/google-modules/wlan/bcmdhd/bcm4383",
+      "revision": "62c6b3226e18ac270386024592d8f07b5bcbc07b"
+    },
+    "private/google-modules/wlan/bcm4389": {
+      "name": "kernel/google-modules/wlan/bcmdhd/bcm4389",
+      "revision": "e7553ccb4fca520f471c13001d65ed8881763f76"
+    },
+    "private/google-modules/wlan/bcm4390": {
+      "name": "kernel/google-modules/wlan/bcmdhd/bcm4390",
+      "revision": "e8225fef75e926e2c4640808c7e32c3a3dcc187e"
+    },
+    "private/google-modules/wlan/bcm4398": {
+      "name": "kernel/google-modules/wlan/bcmdhd/bcm4398",
+      "revision": "c3f938bb8c13405f41ac6fb05f66a6b171492847"
+    },
+    "private/google-modules/wlan/dhd43752p": {
+      "name": "kernel/google-modules/wlan/syna/dhd43752p",
+      "revision": "51e544693282ee36eedc05bf9959d3f923ab39ab"
+    },
+    "private/google-modules/wlan/wcn6740/cnss2": {
+      "name": "kernel/google-modules/wlan/qcom/wcn6740/cnss2",
+      "revision": "4d975459df6d36039c1e711843e187d15a031425"
+    },
+    "private/google-modules/wlan/wcn6740/wlan": {
+      "name": "kernel/google-modules/wlan/qcom/wcn6740/wlan",
+      "revision": "747654ff66061f6a68a31e9b139c0ed165ef0ac7"
+    },
+    "private/google-modules/wlan/wlan_ptracker": {
+      "name": "kernel/google-modules/wlan/wlan_ptracker",
+      "revision": "0a15604e7e93c45335a8f40f0263e47b0ac81227"
+    },
+    "tools/mkbootimg": {
+      "name": "platform/system/tools/mkbootimg",
+      "revision": "615a1fced5f8e2755642d30357674d3bfa21b85e"
+    }
+  },
+  "revision_tag": "refs/tags/android-15.0.0_r0.94",
+  "schema": 1,
+  "upstream_manifest": "https://android.googlesource.com/kernel/manifest",
+  "upstream_manifest_branch": "android-gs-tangorpro-6.1-android15-qpr2-beta"
+}
