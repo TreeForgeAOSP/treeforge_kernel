@@ -2,28 +2,90 @@
 <manifest>
   <remote name="aosp" fetch="https://android.googlesource.com/" />
   <default remote="aosp" sync-j="4" />
-  <project name="kernel/common" path="aosp" revision="c151586fe27836b2993f431368f2c314a193afdb" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
+  <project name="kernel/common" path="aosp" revision="c151586fe27836b2993f431368f2c314a193afdb" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build.config.constants" dest="common/build.config.constants" />
+    <linkfile src="modules.bzl" dest="common/modules.bzl" />
+  </project>
   <project name="platform/build/bazel_common_rules" path="build/bazel_common_rules" revision="b4f0919269ec78d28ec32a34ca90e107c3a41f4e" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/build" path="build/kernel" revision="560e3751ab4d1d96e0db51e860f6437b41786c28" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
+  <project name="kernel/build" path="build/kernel" revision="560e3751ab4d1d96e0db51e860f6437b41786c28" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="kleaf/bazel.sh" dest="tools/bazel" />
+    <linkfile src="build.sh" dest="build/build.sh" />
+    <linkfile src="build_abi.sh" dest="build/build_abi.sh" />
+    <linkfile src="build_test.sh" dest="build/build_test.sh" />
+    <linkfile src="build_utils.sh" dest="build/build_utils.sh" />
+    <linkfile src="config.sh" dest="build/config.sh" />
+    <linkfile src="envsetup.sh" dest="build/envsetup.sh" />
+    <linkfile src="_setup_env.sh" dest="build/_setup_env.sh" />
+    <linkfile src="multi-switcher.sh" dest="build/multi-switcher.sh" />
+    <linkfile src="abi" dest="build/abi" />
+    <linkfile src="static_analysis" dest="build/static_analysis" />
+  </project>
   <project name="platform/external/bazel-skylib" path="external/bazel-skylib" revision="f998e5dc13c03f0eae9e373263d3afff0932c738" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
   <project name="platform/external/python/absl-py" path="external/python/absl-py" revision="2f199605a9875340569e039657f8b4c72d51b84d" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
   <project name="platform/external/stardoc" path="external/stardoc" revision="e83f522ee95419e55d2c5654aa6e0143beeef595" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
   <project name="kernel/configs" path="kernel/configs" revision="0950b8c2d3f35199d3f103d107d6225dc97ced6f" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/akita" path="private/devices/google/akita" revision="46bfef88ef4203529991bdc9dc44aa893cdf1864" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/bluejay" path="private/devices/google/bluejay" revision="e59c03152b04900fbfbfe1694b9925ada2e788c7" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/caimito" path="private/devices/google/caimito" revision="06b9774a93c77f20deaeb6e1e4619b4139c988b7" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/comet" path="private/devices/google/comet" revision="54b531563295694ced69c0536cb79510b1be5a51" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/common" path="private/devices/google/common" revision="ffd9674c792af4a478d44a362201f9de6e65de64" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/felix" path="private/devices/google/felix" revision="ce6f1fabb0bebdcd057b3c0698c2b99e9d0aaa8d" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/gs101" path="private/devices/google/gs101" revision="e1f98a0825d1e988652e23aada1388eb93652a38" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/gs201" path="private/devices/google/gs201" revision="5073cf65f352ddaba705fcbdf09c5f99b10d3acc" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/lynx" path="private/devices/google/lynx" revision="97d9691fed802e78e07fb0778ca38f21841657fe" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/pantah" path="private/devices/google/pantah" revision="ab0a41c7c808baa23947035bb700c0f31bd90263" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/raviole" path="private/devices/google/raviole" revision="7c8375f39def533b9ab0ca8acfee7e85d11fa635" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/shusky" path="private/devices/google/shusky" revision="12ea0513808e5bcc194621c1811bdc2769b8837c" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/tangorpro" path="private/devices/google/tangorpro" revision="4e9c3e4afddf64b3f8dcd26bab68861643a5de31" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/zuma" path="private/devices/google/zuma" revision="b258b4794338ed19f44ee4e09174024eed22a59a" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
-  <project name="kernel/devices/google/zumapro" path="private/devices/google/zumapro" revision="f239f1eb9dc2bc0031a253f6048f20fe47db050b" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
+  <project name="kernel/devices/google/akita" path="private/devices/google/akita" revision="46bfef88ef4203529991bdc9dc44aa893cdf1864" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_akita.sh" dest="build_akita.sh" />
+    <linkfile src="device.bazelrc" dest=".d5.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/bluejay" path="private/devices/google/bluejay" revision="e59c03152b04900fbfbfe1694b9925ada2e788c7" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_bluejay.sh" dest="build_bluejay.sh" />
+    <linkfile src="device.bazelrc" dest=".d14.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/caimito" path="private/devices/google/caimito" revision="06b9774a93c77f20deaeb6e1e4619b4139c988b7" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_caimito.sh" dest="build_caimito.sh" />
+    <linkfile src="device.bazelrc" dest=".d7.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/comet" path="private/devices/google/comet" revision="54b531563295694ced69c0536cb79510b1be5a51" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_comet.sh" dest="build_comet.sh" />
+    <linkfile src="device.bazelrc" dest=".d8.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/common" path="private/devices/google/common" revision="ffd9674c792af4a478d44a362201f9de6e65de64" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="bazel.WORKSPACE" dest="WORKSPACE" />
+    <linkfile src="device.bazelrc" dest="device.bazelrc" />
+    <linkfile src="update_symbol_list.sh" dest="update_symbol_list.sh" />
+    <linkfile src="kleaf/common.BUILD.bazel" dest="common/BUILD.bazel" />
+  </project>
+  <project name="kernel/devices/google/felix" path="private/devices/google/felix" revision="ce6f1fabb0bebdcd057b3c0698c2b99e9d0aaa8d" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_felix.sh" dest="build_felix.sh" />
+    <linkfile src="device.bazelrc" dest=".d2.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/gs101" path="private/devices/google/gs101" revision="e1f98a0825d1e988652e23aada1388eb93652a38" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_gs101.sh" dest="build_gs101.sh" />
+    <linkfile src="device.bazelrc" dest=".c1.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/gs201" path="private/devices/google/gs201" revision="5073cf65f352ddaba705fcbdf09c5f99b10d3acc" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_gs201.sh" dest="build_gs201.sh" />
+    <linkfile src="device.bazelrc" dest=".c2.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/lynx" path="private/devices/google/lynx" revision="97d9691fed802e78e07fb0778ca38f21841657fe" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_lynx.sh" dest="build_lynx.sh" />
+    <linkfile src="device.bazelrc" dest=".d15.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/pantah" path="private/devices/google/pantah" revision="ab0a41c7c808baa23947035bb700c0f31bd90263" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_pantah.sh" dest="build_pantah.sh" />
+    <linkfile src="device.bazelrc" dest=".d1.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/raviole" path="private/devices/google/raviole" revision="7c8375f39def533b9ab0ca8acfee7e85d11fa635" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_raviole.sh" dest="build_raviole.sh" />
+    <linkfile src="device.bazelrc" dest=".d13.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/shusky" path="private/devices/google/shusky" revision="12ea0513808e5bcc194621c1811bdc2769b8837c" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_shusky.sh" dest="build_shusky.sh" />
+    <linkfile src="device.bazelrc" dest=".d4.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/tangorpro" path="private/devices/google/tangorpro" revision="4e9c3e4afddf64b3f8dcd26bab68861643a5de31" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_tangorpro.sh" dest="build_tangorpro.sh" />
+    <linkfile src="device.bazelrc" dest=".d3.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/zuma" path="private/devices/google/zuma" revision="b258b4794338ed19f44ee4e09174024eed22a59a" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_zuma.sh" dest="build_zuma.sh" />
+    <linkfile src="device.bazelrc" dest=".c3.bazelrc" />
+  </project>
+  <project name="kernel/devices/google/zumapro" path="private/devices/google/zumapro" revision="f239f1eb9dc2bc0031a253f6048f20fe47db050b" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
+    <linkfile src="build_zumapro.sh" dest="build_zumapro.sh" />
+    <linkfile src="device.bazelrc" dest=".c4.bazelrc" />
+  </project>
   <project name="kernel/google-modules/amplifiers" path="private/google-modules/amplifiers" revision="5e796c628103210e63c36269762fb14383fe729e" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
   <project name="kernel/google-modules/aoc" path="private/google-modules/aoc" revision="c81c2548158a1c0b5e81a2734bdc67d57bc407ae" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
   <project name="kernel/google-modules/aoc-ipc" path="private/google-modules/aoc_ipc" revision="d79e45ae6a589ca43f7699709c3e2b72a3b727a2" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
