@@ -1,0 +1,10 @@
+{
+  "description": "Canonical Google tangorpro kernel",
+  "device": "tangorpro",
+  "id": "source",
+  "kernel_release": "android-15.0.0_r0.94",
+  "label": "Source",
+  "patches": [],
+  "schema": 1,
+  "source_lock": "provenance/google/android-15.0.0_r0.94/SOURCE_LOCK.json"
+}

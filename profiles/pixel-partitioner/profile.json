@@ -1,0 +1,24 @@
+{
+  "description": "Source + Pixel Partitioner framebuffer bridge",
+  "device": "tangorpro",
+  "hardware_accepted_boot_sha256": "eb8e3ddb9dfdcdd24020d44398548445fde31de5088ba445b061f463f84a716f",
+  "id": "pixel-partitioner",
+  "kernel_release": "android-15.0.0_r0.94",
+  "label": "Pixel Partitioner",
+  "patches": [
+    {
+      "base_revision": "c151586fe27836b2993f431368f2c314a193afdb",
+      "patch": "profiles/pixel-partitioner/patches/kernel-common/0001-pixel-partitioner-framebuffer.patch",
+      "repository": "aosp",
+      "sha256": "bd2a202919d43db2bffbd12338327503619156f60b5f8a060c1f3a18a879a4b3"
+    },
+    {
+      "base_revision": "5073cf65f352ddaba705fcbdf09c5f99b10d3acc",
+      "patch": "profiles/pixel-partitioner/patches/gs201/0001-enable-pixel-partitioner-framebuffer.patch",
+      "repository": "private/devices/google/gs201",
+      "sha256": "d18a3679b5ee580b61ebf37cdbe000de78707ed618401eb5fadc7da5edc37762"
+    }
+  ],
+  "schema": 1,
+  "source_lock": "provenance/google/android-15.0.0_r0.94/SOURCE_LOCK.json"
+}

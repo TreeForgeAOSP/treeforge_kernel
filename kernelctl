@@ -82,6 +82,124 @@ class KernelCtlError(RuntimeError):
     pass
 
 
+BUILD_PROFILE_ORDER = (
+    "source",
+    "pixel-partitioner",
+)
+
+
+BUILD_PROFILES = {
+    "source": {
+        "label": "Source",
+        "description": (
+            "Canonical Google tangorpro kernel"
+        ),
+    },
+    "pixel-partitioner": {
+        "label": "Pixel Partitioner",
+        "description": (
+            "Source + Pixel Partitioner framebuffer bridge"
+        ),
+    },
+}
+
+
+def resolve_build_profile(
+    requested: str | None,
+) -> str:
+    """
+    Resolve the user-facing kernel build profile.
+
+    Explicit --profile is suitable for automation. Plain
+    interactive `kernelctl build` presents the profile menu.
+
+    Non-interactive callers that omit --profile retain the
+    historical source/default behavior until profile recipes
+    are wired into the build pipeline.
+    """
+
+    if requested is not None:
+        if requested not in BUILD_PROFILES:
+            raise KernelCtlError(
+                f"unknown kernel build profile: {requested}"
+            )
+
+        return requested
+
+    if not sys.stdin.isatty():
+        return "source"
+
+    print()
+    print("TreeForge Kernel Build")
+    print("======================")
+    print()
+    print("Build profile:")
+    print()
+
+    for number, name in enumerate(
+        BUILD_PROFILE_ORDER,
+        start=1,
+    ):
+        profile = BUILD_PROFILES[name]
+
+        print(
+            f"  {number}. {profile['label']}"
+        )
+        print(
+            f"     {profile['description']}"
+        )
+        print()
+
+    while True:
+        value = input("Select [1]: ").strip()
+
+        if not value:
+            value = "1"
+
+        try:
+            index = int(value)
+        except ValueError:
+            print(
+                "Select a profile by number."
+            )
+            continue
+
+        if (
+            index < 1
+            or index > len(BUILD_PROFILE_ORDER)
+        ):
+            print(
+                "Select a listed profile."
+            )
+            continue
+
+        return BUILD_PROFILE_ORDER[
+            index - 1
+        ]
+
+
+def print_build_profile(
+    profile: str,
+) -> None:
+    record = BUILD_PROFILES[
+        profile
+    ]
+
+    print()
+    print("Selected build profile")
+    print("----------------------")
+    print(
+        f"Profile:     "
+        f"{record['label']} ({profile})"
+    )
+    print(
+        f"Description: "
+        f"{record['description']}"
+    )
+    print()
+
+
+
 def run(args, *, capture=False, check=True):
     print("+", " ".join(str(x) for x in args))
 
@@ -1070,6 +1188,957 @@ def load_treeforge_tools_contract() -> dict:
             )
 
     return data
+
+
+
+def build_profile_path(
+    profile: str,
+) -> Path:
+    return (
+        ROOT
+        / "profiles"
+        / profile
+        / "profile.json"
+    )
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+
+    with path.open("rb") as stream:
+        for chunk in iter(
+            lambda: stream.read(1024 * 1024),
+            b"",
+        ):
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+def load_build_profile(
+    profile: str,
+) -> dict:
+    path = build_profile_path(
+        profile
+    )
+
+    need_file(path)
+
+    try:
+        data = json.loads(
+            path.read_text(
+                encoding="utf-8"
+            )
+        )
+    except Exception as error:
+        raise KernelCtlError(
+            f"invalid kernel profile JSON: "
+            f"{path}: {error}"
+        ) from error
+
+    if data.get("schema") != 1:
+        raise KernelCtlError(
+            f"unsupported kernel profile schema: "
+            f"{data.get('schema')}"
+        )
+
+    if data.get("id") != profile:
+        raise KernelCtlError(
+            "kernel profile identity mismatch: "
+            f"{data.get('id')} != {profile}"
+        )
+
+    if (
+        data.get("kernel_release")
+        != KERNEL_PROVIDER_RELEASE
+    ):
+        raise KernelCtlError(
+            "kernel profile release mismatch: "
+            f"{data.get('kernel_release')} != "
+            f"{KERNEL_PROVIDER_RELEASE}"
+        )
+
+    source_lock_value = data.get(
+        "source_lock"
+    )
+
+    if not isinstance(
+        source_lock_value,
+        str,
+    ):
+        raise KernelCtlError(
+            "kernel profile source_lock is missing"
+        )
+
+    source_lock = (
+        ROOT
+        / source_lock_value
+    )
+
+    need_file(source_lock)
+
+    data["_profile_path"] = path
+    data["_source_lock_path"] = source_lock
+
+    return data
+
+
+def load_profile_source_lock(
+    profile_data: dict,
+) -> dict:
+    path = profile_data[
+        "_source_lock_path"
+    ]
+
+    try:
+        data = json.loads(
+            path.read_text(
+                encoding="utf-8"
+            )
+        )
+    except Exception as error:
+        raise KernelCtlError(
+            f"invalid source lock JSON: "
+            f"{path}: {error}"
+        ) from error
+
+    if data.get("schema") != 1:
+        raise KernelCtlError(
+            "unsupported source-lock schema: "
+            f"{data.get('schema')}"
+        )
+
+    if (
+        data.get("kernel_release")
+        != KERNEL_PROVIDER_RELEASE
+    ):
+        raise KernelCtlError(
+            "source-lock kernel release mismatch"
+        )
+
+    projects = data.get(
+        "projects"
+    )
+
+    if not isinstance(
+        projects,
+        dict,
+    ):
+        raise KernelCtlError(
+            "source lock has no projects map"
+        )
+
+    return data
+
+
+def validate_profile_patch_records(
+    profile_data: dict,
+) -> list[dict]:
+    patches = profile_data.get(
+        "patches",
+        [],
+    )
+
+    if not isinstance(
+        patches,
+        list,
+    ):
+        raise KernelCtlError(
+            "kernel profile patches must be a list"
+        )
+
+    validated = []
+
+    for record in patches:
+        if not isinstance(
+            record,
+            dict,
+        ):
+            raise KernelCtlError(
+                "kernel profile patch record "
+                "must be an object"
+            )
+
+        repository = record.get(
+            "repository"
+        )
+
+        base_revision = record.get(
+            "base_revision"
+        )
+
+        patch_value = record.get(
+            "patch"
+        )
+
+        expected_sha256 = record.get(
+            "sha256"
+        )
+
+        if not all(
+            isinstance(value, str)
+            and value
+            for value in (
+                repository,
+                base_revision,
+                patch_value,
+                expected_sha256,
+            )
+        ):
+            raise KernelCtlError(
+                "incomplete kernel profile "
+                "patch record"
+            )
+
+        patch = (
+            ROOT
+            / patch_value
+        )
+
+        need_file(patch)
+
+        actual_sha256 = file_sha256(
+            patch
+        )
+
+        if actual_sha256 != expected_sha256:
+            raise KernelCtlError(
+                "kernel profile patch SHA256 "
+                "mismatch:\n"
+                f"  patch={patch}\n"
+                f"  expected={expected_sha256}\n"
+                f"  actual={actual_sha256}"
+            )
+
+        repository_root = (
+            ROOT
+            / repository
+        )
+
+        validated.append(
+            {
+                **record,
+                "_patch_path":
+                    patch,
+                "_repository_root":
+                    repository_root,
+            }
+        )
+
+    return validated
+
+
+def all_managed_profile_patches() -> list[dict]:
+    profile_root = (
+        ROOT
+        / "profiles"
+    )
+
+    records = []
+    seen = set()
+
+    if not profile_root.is_dir():
+        return records
+
+    for path in sorted(
+        profile_root.glob(
+            "*/profile.json"
+        )
+    ):
+        try:
+            data = json.loads(
+                path.read_text(
+                    encoding="utf-8"
+                )
+            )
+        except Exception as error:
+            raise KernelCtlError(
+                f"invalid profile JSON: "
+                f"{path}: {error}"
+            ) from error
+
+        profile = data.get(
+            "id"
+        )
+
+        if (
+            not isinstance(profile, str)
+            or not profile
+        ):
+            raise KernelCtlError(
+                f"profile id missing: {path}"
+            )
+
+        canonical = load_build_profile(
+            profile
+        )
+
+        for record in (
+            validate_profile_patch_records(
+                canonical
+            )
+        ):
+            key = (
+                record["repository"],
+                record["patch"],
+                record["sha256"],
+            )
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+            records.append(
+                record
+            )
+
+    return records
+
+
+def git_capture(
+    repository: Path,
+    *arguments: str,
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            *arguments,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+
+def repository_head(
+    repository: Path,
+) -> str | None:
+    if not repository.is_dir():
+        return None
+
+    result = git_capture(
+        repository,
+        "rev-parse",
+        "HEAD",
+    )
+
+    if result.returncode != 0:
+        return None
+
+    return result.stdout.strip()
+
+
+def patch_state(
+    record: dict,
+) -> str:
+    repository = record[
+        "_repository_root"
+    ]
+
+    patch = record[
+        "_patch_path"
+    ]
+
+    if not repository.is_dir():
+        return "repository-missing"
+
+    head = repository_head(
+        repository
+    )
+
+    if head != record[
+        "base_revision"
+    ]:
+        return "base-revision-mismatch"
+
+    reverse = git_capture(
+        repository,
+        "apply",
+        "--reverse",
+        "--check",
+        str(patch),
+    )
+
+    forward = git_capture(
+        repository,
+        "apply",
+        "--check",
+        str(patch),
+    )
+
+    if (
+        reverse.returncode == 0
+        and forward.returncode != 0
+    ):
+        return "applied"
+
+    if (
+        forward.returncode == 0
+        and reverse.returncode != 0
+    ):
+        return "pristine"
+
+    if (
+        reverse.returncode == 0
+        and forward.returncode == 0
+    ):
+        raise KernelCtlError(
+            "ambiguous kernel profile patch state: "
+            f"{patch}"
+        )
+
+    return "diverged"
+
+
+def normalize_managed_profile_patches() -> None:
+    print()
+    print("Normalizing profile-managed source")
+    print("----------------------------------")
+
+    for record in (
+        all_managed_profile_patches()
+    ):
+        repository = record[
+            "_repository_root"
+        ]
+
+        patch = record[
+            "_patch_path"
+        ]
+
+        state = patch_state(
+            record
+        )
+
+        print(
+            f"{record['repository']}: "
+            f"{patch.name}: {state}"
+        )
+
+        if state == "pristine":
+            continue
+
+        if state == "applied":
+            result = git_capture(
+                repository,
+                "apply",
+                "--reverse",
+                str(patch),
+            )
+
+            if result.returncode != 0:
+                raise KernelCtlError(
+                    "unable to reverse managed "
+                    "kernel patch:\n"
+                    + result.stdout
+                )
+
+            if patch_state(record) != "pristine":
+                raise KernelCtlError(
+                    "kernel patch did not return "
+                    "to pristine state"
+                )
+
+            continue
+
+        if state == "repository-missing":
+            continue
+
+        if state == "base-revision-mismatch":
+            continue
+
+        raise KernelCtlError(
+            "profile-managed kernel source "
+            "contains an unexpected divergence:\n"
+            f"  repository={repository}\n"
+            f"  patch={patch}"
+        )
+
+
+def source_workspace_state(
+    source_lock: dict,
+) -> tuple[
+    list[str],
+    list[str],
+]:
+    missing = []
+    mismatched = []
+
+    for path_value, record in sorted(
+        source_lock[
+            "projects"
+        ].items()
+    ):
+        expected = record.get(
+            "revision"
+        )
+
+        if not isinstance(
+            expected,
+            str,
+        ):
+            raise KernelCtlError(
+                "source-lock project revision "
+                f"is missing: {path_value}"
+            )
+
+        repository = (
+            ROOT
+            / path_value
+        )
+
+        head = repository_head(
+            repository
+        )
+
+        if head is None:
+            missing.append(
+                path_value
+            )
+            continue
+
+        if head != expected:
+            mismatched.append(
+                f"{path_value}: "
+                f"{head} != {expected}"
+            )
+
+    return (
+        missing,
+        mismatched,
+    )
+
+
+def initialize_source_workspace() -> None:
+    need_command(
+        "repo"
+    )
+
+    if not (
+        ROOT
+        / ".repo"
+    ).is_dir():
+        print()
+        print("Initializing pinned Google source workspace")
+        print("-----------------------------------------")
+
+        run([
+            "repo",
+            "init",
+            "-u",
+            SETUP_MANIFEST_URL,
+            "-b",
+            SETUP_MANIFEST_BRANCH,
+            "-m",
+            SETUP_MANIFEST_NAME,
+            "--depth=1",
+        ])
+
+    print()
+    print("Syncing pinned Google source workspace")
+    print("-------------------------------------")
+
+    run([
+        "repo",
+        "sync",
+        "-j4",
+    ])
+
+
+def ensure_profile_source_workspace(
+    source_lock: dict,
+) -> None:
+    missing, mismatched = (
+        source_workspace_state(
+            source_lock
+        )
+    )
+
+    if (
+        not missing
+        and not mismatched
+    ):
+        print()
+        print("Pinned Google source workspace")
+        print("------------------------------")
+        print(
+            f"Projects verified: "
+            f"{len(source_lock['projects'])}/"
+            f"{len(source_lock['projects'])}"
+        )
+        print("Source sync:       REUSE")
+        return
+
+    print()
+    print("Pinned source workspace requires sync")
+    print("-------------------------------------")
+
+    for path in missing:
+        print(
+            f"MISSING: {path}"
+        )
+
+    for mismatch in mismatched:
+        print(
+            f"MISMATCH: {mismatch}"
+        )
+
+    initialize_source_workspace()
+
+    missing, mismatched = (
+        source_workspace_state(
+            source_lock
+        )
+    )
+
+    if missing or mismatched:
+        detail = "\n".join(
+            [
+                *(
+                    f"missing: {value}"
+                    for value in missing
+                ),
+                *(
+                    f"mismatch: {value}"
+                    for value in mismatched
+                ),
+            ]
+        )
+
+        raise KernelCtlError(
+            "pinned Google source workspace "
+            "failed verification after sync:\n"
+            + detail
+        )
+
+    print(
+        f"Projects verified: "
+        f"{len(source_lock['projects'])}/"
+        f"{len(source_lock['projects'])}"
+    )
+    print("Source sync:       FRESH")
+
+
+def verify_source_workspace_clean(
+    source_lock: dict,
+) -> None:
+    dirty = []
+
+    for path_value in sorted(
+        source_lock[
+            "projects"
+        ]
+    ):
+        repository = (
+            ROOT
+            / path_value
+        )
+
+        result = git_capture(
+            repository,
+            "status",
+            "--porcelain",
+        )
+
+        if result.returncode != 0:
+            raise KernelCtlError(
+                "unable to inspect source repository: "
+                f"{repository}"
+            )
+
+        if result.stdout.strip():
+            dirty.append(
+                (
+                    path_value,
+                    result.stdout.strip(),
+                )
+            )
+
+    if dirty:
+        formatted = "\n".join(
+            f"{path}:\n{status}"
+            for path, status in dirty
+        )
+
+        raise KernelCtlError(
+            "Google source workspace contains "
+            "unmanaged modifications:\n"
+            + formatted
+        )
+
+
+def apply_selected_profile_patches(
+    profile_data: dict,
+) -> None:
+    patches = (
+        validate_profile_patch_records(
+            profile_data
+        )
+    )
+
+    print()
+    print("Applying selected kernel profile")
+    print("--------------------------------")
+
+    if not patches:
+        print("Patches: none")
+        return
+
+    for record in patches:
+        repository = record[
+            "_repository_root"
+        ]
+
+        patch = record[
+            "_patch_path"
+        ]
+
+        head = repository_head(
+            repository
+        )
+
+        if head != record[
+            "base_revision"
+        ]:
+            raise KernelCtlError(
+                "kernel patch base revision "
+                "does not match:\n"
+                f"  repository={repository}\n"
+                f"  expected="
+                f"{record['base_revision']}\n"
+                f"  actual={head}"
+            )
+
+        state = patch_state(
+            record
+        )
+
+        if state == "applied":
+            print(
+                f"{record['repository']}: "
+                f"{patch.name}: REUSE"
+            )
+            continue
+
+        if state != "pristine":
+            raise KernelCtlError(
+                "kernel profile patch cannot "
+                "be applied safely:\n"
+                f"  repository={repository}\n"
+                f"  patch={patch}\n"
+                f"  state={state}"
+            )
+
+        result = git_capture(
+            repository,
+            "apply",
+            str(patch),
+        )
+
+        if result.returncode != 0:
+            raise KernelCtlError(
+                "kernel profile patch apply "
+                "failed:\n"
+                + result.stdout
+            )
+
+        if patch_state(
+            record
+        ) != "applied":
+            raise KernelCtlError(
+                "kernel profile patch did not "
+                "reach applied state"
+            )
+
+        print(
+            f"{record['repository']}: "
+            f"{patch.name}: APPLY"
+        )
+
+
+def prepare_build_profile_source(
+    profile: str,
+) -> dict:
+    profile_data = load_build_profile(
+        profile
+    )
+
+    source_lock = (
+        load_profile_source_lock(
+            profile_data
+        )
+    )
+
+    #
+    # First return every TreeForge-managed patch to its pristine
+    # pinned Google base. Unexpected user/source modifications
+    # are never discarded.
+    #
+    normalize_managed_profile_patches()
+
+    ensure_profile_source_workspace(
+        source_lock
+    )
+
+    #
+    # At this point every source repository must be pristine.
+    # This prevents profile switching from silently swallowing
+    # unrelated kernel development work.
+    #
+    verify_source_workspace_clean(
+        source_lock
+    )
+
+    apply_selected_profile_patches(
+        profile_data
+    )
+
+    return profile_data
+
+
+def print_build_profile_recipe_plan(
+    profile: str,
+) -> None:
+    data = load_build_profile(
+        profile
+    )
+
+    source_lock = (
+        load_profile_source_lock(
+            data
+        )
+    )
+
+    patches = (
+        validate_profile_patch_records(
+            data
+        )
+    )
+
+    print("Kernel profile recipe")
+    print("=====================")
+    print()
+    print(
+        f"Profile:         "
+        f"{data['label']} ({profile})"
+    )
+    print(
+        f"Kernel release:  "
+        f"{data['kernel_release']}"
+    )
+    print(
+        f"Source lock:     "
+        f"{data['_source_lock_path']}"
+    )
+    print(
+        f"Source projects: "
+        f"{len(source_lock['projects'])}"
+    )
+    print(
+        f"Patch count:     "
+        f"{len(patches)}"
+    )
+
+    for record in patches:
+        print(
+            f"  {record['repository']}: "
+            f"{record['_patch_path'].name} "
+            f"{record['sha256'][:12]}"
+        )
+
+    print()
+
+
+def annotate_build_metadata_profile(
+    metadata: Path,
+    profile: str,
+) -> None:
+    data = load_build_profile(
+        profile
+    )
+
+    patches = (
+        validate_profile_patch_records(
+            data
+        )
+    )
+
+    try:
+        payload = json.loads(
+            metadata.read_text(
+                encoding="utf-8"
+            )
+        )
+    except Exception as error:
+        raise KernelCtlError(
+            f"unable to annotate build metadata: "
+            f"{metadata}: {error}"
+        ) from error
+
+    profile_path = data[
+        "_profile_path"
+    ]
+
+    source_lock = data[
+        "_source_lock_path"
+    ]
+
+    payload[
+        "build_profile"
+    ] = profile
+
+    payload[
+        "build_profile_recipe"
+    ] = str(
+        profile_path.relative_to(ROOT)
+    )
+
+    payload[
+        "build_profile_recipe_sha256"
+    ] = file_sha256(
+        profile_path
+    )
+
+    payload[
+        "source_lock"
+    ] = str(
+        source_lock.relative_to(ROOT)
+    )
+
+    payload[
+        "source_lock_sha256"
+    ] = file_sha256(
+        source_lock
+    )
+
+    payload[
+        "profile_patches"
+    ] = [
+        {
+            "repository":
+                record["repository"],
+            "base_revision":
+                record["base_revision"],
+            "patch":
+                record["patch"],
+            "sha256":
+                record["sha256"],
+        }
+        for record in patches
+    ]
+
+    metadata.write_text(
+        json.dumps(
+            payload,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def build_environment_plan(contract: dict) -> dict:
@@ -2442,7 +3511,14 @@ def package_source_generation(
     return boot
 
 
-def execute_kernel_build(signing: str) -> int:
+def execute_kernel_build(
+    signing: str,
+    profile: str,
+) -> int:
+    prepare_build_profile_source(
+        profile
+    )
+
     print("TreeForge Kernel Build")
     print("======================")
     print()
@@ -2462,6 +3538,11 @@ def execute_kernel_build(signing: str) -> int:
         command=command,
         environment=env,
         contract=contract,
+    )
+
+    annotate_build_metadata_profile(
+        metadata,
+        profile,
     )
 
     print()
@@ -2560,9 +3641,28 @@ def build_command(argv) -> int:
         ),
     )
 
+    parser.add_argument(
+        "--profile",
+        choices=BUILD_PROFILE_ORDER,
+        help=(
+            "kernel build profile; omit in an "
+            "interactive terminal to choose from "
+            "the profile menu"
+        ),
+    )
+
     args = parser.parse_args(argv)
 
+    profile = resolve_build_profile(
+        args.profile
+    )
+
+    print_build_profile(
+        profile
+    )
+
     if args.plan_only:
+        print_build_profile_recipe_plan(profile)
         kernel_build_plan()
         print_build_signing_plan(args.signing)
 
@@ -2600,7 +3700,10 @@ def build_command(argv) -> int:
 
         return 0
 
-    return execute_kernel_build(args.signing)
+    return execute_kernel_build(
+        args.signing,
+        profile,
+    )
 
 
 

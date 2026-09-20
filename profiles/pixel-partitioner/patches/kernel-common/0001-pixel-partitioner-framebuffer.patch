@@ -1,0 +1,763 @@
+diff --git a/arch/arm64/configs/gki_defconfig b/arch/arm64/configs/gki_defconfig
+index 1d6b7015c..efb24d36d 100644
+--- a/arch/arm64/configs/gki_defconfig
++++ b/arch/arm64/configs/gki_defconfig
+@@ -330,6 +330,7 @@ CONFIG_BLK_DEV_NVME=y
+ CONFIG_NVME_MULTIPATH=y
+ CONFIG_SRAM=y
+ CONFIG_UID_SYS_STATS=y
++CONFIG_PIXEL_PARTITIONER_FB=y
+ CONFIG_SCSI=y
+ # CONFIG_SCSI_PROC_FS is not set
+ CONFIG_BLK_DEV_SD=y
+diff --git a/drivers/misc/Kconfig b/drivers/misc/Kconfig
+index b3f752fac..fc8d4a222 100644
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -524,3 +524,15 @@ source "drivers/misc/uacce/Kconfig"
+ source "drivers/misc/pvpanic/Kconfig"
+ source "drivers/misc/mchp_pci1xxxx/Kconfig"
+ endmenu
++
++config PIXEL_PARTITIONER_FB
++	bool "Pixel Partitioner early GS201 framebuffer bridge"
++	depends on OF && MMU
++	help
++	  Read the existing GS201 bootloader RDMA scanout state and expose
++	  the validated fb_handover buffer to the Pixel Partitioner early
++	  userspace.
++
++	  This helper does not program DECON, DPP, RDMA, DSIM, or the panel.
++	  It is intended only for the early boot selector before normal
++	  Exynos DRM ownership begins.
+diff --git a/drivers/misc/Makefile b/drivers/misc/Makefile
+index 72b154bd9..d79824051 100644
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -63,3 +63,4 @@ obj-$(CONFIG_OPEN_DICE)		+= open-dice.o
+ obj-$(CONFIG_GP_PCI1XXXX)	+= mchp_pci1xxxx/
+ obj-$(CONFIG_VCPU_STALL_DETECTOR)	+= vcpu_stall_detector.o
+ obj-$(CONFIG_UID_SYS_STATS)	+= uid_sys_stats.o
++obj-$(CONFIG_PIXEL_PARTITIONER_FB)	+= pixel_partitioner_fb.o
+diff --git a/drivers/misc/pixel_partitioner_fb.c b/drivers/misc/pixel_partitioner_fb.c
+new file mode 100644
+index 000000000..cf77e88d5
+--- /dev/null
++++ b/drivers/misc/pixel_partitioner_fb.c
+@@ -0,0 +1,716 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Pixel Partitioner early framebuffer bridge.
++ *
++ * Tangorpro / GS201 boot-only handover helper.
++ *
++ * This driver DOES NOT program DECON, DPP, RDMA, DSIM, or the panel.
++ * It only:
++ *
++ *   - discovers the existing exynos,fb_handover reserved-memory region;
++ *   - finds the DECON instance which owns that memory-region;
++ *   - inspects the RDMA shadow state of that DECON's DPP inputs;
++ *   - accepts exactly one conservative linear RGB scanout candidate;
++ *   - exposes the already-scanning framebuffer through a misc device.
++ *
++ * The normal Exynos DRM driver remains responsible for real display
++ * ownership after Pixel Partitioner hands off to the selected OS.
++ */
++
++#include <linux/capability.h>
++#include <linux/fs.h>
++#include <linux/init.h>
++#include <linux/io.h>
++#include <linux/ioctl.h>
++#include <linux/miscdevice.h>
++#include <linux/mm.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/of_reserved_mem.h>
++#include <linux/types.h>
++#include <linux/uaccess.h>
++
++/*
++ * GS201 uses the cal_9845 RDMA register contract for the normal
++ * DECON/DPP path.
++ *
++ * These constants intentionally mirror only the tiny read-only subset
++ * needed by Pixel Partitioner.
++ */
++#define PP_DMA_SHD_OFFSET            0x0400
++
++#define PP_RDMA_IN_CTRL_0            0x0008
++#define PP_RDMA_IN_CTRL_1            0x000c
++#define PP_RDMA_SRC_SIZE             0x0010
++#define PP_RDMA_SRC_OFFSET           0x0014
++#define PP_RDMA_IMG_SIZE             0x0018
++#define PP_RDMA_BASEADDR_Y8          0x0040
++#define PP_RDMA_SRC_STRIDE_0         0x0050
++#define PP_RDMA_SRC_STRIDE_1         0x0054
++
++#define PP_IDMA_IMG_FORMAT_MASK      (0x3fU << 8)
++#define PP_IDMA_ROT_MASK             (0x7U << 4)
++#define PP_IDMA_CSET_EN              (1U << 3)
++#define PP_IDMA_SBWC_EN              (1U << 2)
++#define PP_IDMA_AFBC_EN              (1U << 1)
++#define PP_IDMA_BLOCK_EN             (1U << 0)
++
++#define PP_IDMA_SPLIT_8K_MASK        0x3U
++#define PP_IDMA_STRIDE_SEL_MASK      (0xfU << 20)
++
++#define PP_FB_ABI_VERSION            1U
++
++#define PP_FB_FLAG_LINEAR            (1U << 0)
++#define PP_FB_FLAG_WRITE_COMBINE     (1U << 1)
++
++/*
++ * One-way userspace handoff guard.
++ *
++ * Before exec'ing Android, Pixel Partitioner can SEAL the bridge.
++ * New mmap/open attempts then fail for the remainder of this boot.
++ */
++#define PP_FB_IOCTL_MAGIC            'P'
++#define PP_FB_IOCTL_SEAL             _IO(PP_FB_IOCTL_MAGIC, 0x01)
++
++struct pp_fb_info {
++	__u32 abi_version;
++	__u32 hw_format;
++
++	__u32 width;
++	__u32 height;
++
++	__u32 source_width;
++	__u32 source_height;
++
++	__u32 source_x;
++	__u32 source_y;
++
++	__u32 stride;
++	__u32 bytes_per_pixel;
++
++	__u32 dpp_index;
++	__u32 flags;
++
++	__u64 framebuffer_bytes;
++	__u64 mmap_bytes;
++};
++
++struct pp_candidate {
++	struct pp_fb_info info;
++	phys_addr_t phys;
++};
++
++static struct pp_candidate pp_active;
++static bool pp_ready;
++static bool pp_sealed;
++
++/*
++ * We intentionally support only the simple uncompressed RGB formats
++ * required for the first boot-menu implementation.
++ *
++ * cal_9845:
++ *   0..7 = 32-bit RGB family
++ *   8..9 = RGB565 family
++ *
++ * Start conservatively with the 32-bit family because the existing
++ * Pixel Partitioner renderer is also 32-bit oriented.
++ */
++static int pp_bytes_per_pixel(u32 format)
++{
++	if (format <= 7)
++		return 4;
++
++	return -EINVAL;
++}
++
++static bool pp_range_inside(phys_addr_t base, u64 size,
++			    phys_addr_t outer_base, u64 outer_size)
++{
++	u64 end;
++	u64 outer_end;
++
++	if (!size || !outer_size)
++		return false;
++
++	if (check_add_overflow((u64)base, size, &end))
++		return false;
++
++	if (check_add_overflow((u64)outer_base, outer_size, &outer_end))
++		return false;
++
++	return (u64)base >= (u64)outer_base && end <= outer_end;
++}
++
++static struct device_node *
++pp_find_handover_decon(struct device_node *rmem_np)
++{
++	struct device_node *np;
++
++	for_each_compatible_node(np, NULL, "samsung,exynos-decon") {
++		struct device_node *memory_region;
++		bool match;
++
++		memory_region =
++			of_parse_phandle(np, "memory-region", 0);
++
++		if (!memory_region)
++			continue;
++
++		match = memory_region == rmem_np;
++		of_node_put(memory_region);
++
++		if (match)
++			return np;
++	}
++
++	return NULL;
++}
++
++static int
++pp_decode_dpp(struct device_node *dpp_np,
++	      unsigned int dpp_index,
++	      struct reserved_mem *rmem,
++	      struct pp_candidate *out)
++{
++	struct resource dma_res;
++	void __iomem *dma;
++	int dma_index;
++	u32 ctrl0;
++	u32 ctrl1;
++	u32 src_size;
++	u32 src_offset;
++	u32 img_size;
++	u32 stride0;
++	u32 stride1;
++	u32 base;
++	u32 format;
++	u32 rotation;
++	u32 stride_sel;
++	u32 source_width;
++	u32 source_height;
++	u32 source_x;
++	u32 source_y;
++	u32 width;
++	u32 height;
++	u32 stride;
++	u64 framebuffer_bytes;
++	u64 mmap_bytes;
++	int cpp;
++
++	dma_index =
++		of_property_match_string(
++			dpp_np,
++			"reg-names",
++			"dma"
++		);
++
++	if (dma_index < 0)
++		return -ENOENT;
++
++	if (of_address_to_resource(
++		    dpp_np,
++		    dma_index,
++		    &dma_res))
++		return -EINVAL;
++
++	dma = of_iomap(dpp_np, dma_index);
++	if (!dma)
++		return -ENOMEM;
++
++	/*
++	 * Read only the SHADOW state. This is the state corresponding to
++	 * the configuration currently being consumed by the display path.
++	 */
++	ctrl0 = readl(dma +
++		      PP_DMA_SHD_OFFSET +
++		      PP_RDMA_IN_CTRL_0);
++
++	ctrl1 = readl(dma +
++		      PP_DMA_SHD_OFFSET +
++		      PP_RDMA_IN_CTRL_1);
++
++	src_size = readl(dma +
++			 PP_DMA_SHD_OFFSET +
++			 PP_RDMA_SRC_SIZE);
++
++	src_offset = readl(dma +
++			   PP_DMA_SHD_OFFSET +
++			   PP_RDMA_SRC_OFFSET);
++
++	img_size = readl(dma +
++			 PP_DMA_SHD_OFFSET +
++			 PP_RDMA_IMG_SIZE);
++
++	base = readl(dma +
++		     PP_DMA_SHD_OFFSET +
++		     PP_RDMA_BASEADDR_Y8);
++
++	stride0 = readl(dma +
++			PP_DMA_SHD_OFFSET +
++			PP_RDMA_SRC_STRIDE_0);
++
++	stride1 = readl(dma +
++			PP_DMA_SHD_OFFSET +
++			PP_RDMA_SRC_STRIDE_1);
++
++	iounmap(dma);
++
++	format =
++		(ctrl0 & PP_IDMA_IMG_FORMAT_MASK) >> 8;
++
++	rotation =
++		(ctrl0 & PP_IDMA_ROT_MASK) >> 4;
++
++	source_width =
++		src_size & 0xffffU;
++
++	source_height =
++		(src_size >> 16) & 0xffffU;
++
++	source_x =
++		src_offset & 0x3fffU;
++
++	source_y =
++		(src_offset >> 16) & 0x3fffU;
++
++	width =
++		img_size & 0x3fffU;
++
++	height =
++		(img_size >> 16) & 0x3fffU;
++
++	stride_sel =
++		(stride0 & PP_IDMA_STRIDE_SEL_MASK) >> 20;
++
++	cpp = pp_bytes_per_pixel(format);
++	if (cpp < 0)
++		return -ENOTSUPP;
++
++	/*
++	 * Reject every mode that would require understanding or changing
++	 * a nonlinear/compressed/rotated bootloader surface.
++	 */
++	if (ctrl0 &
++	    (PP_IDMA_CSET_EN |
++	     PP_IDMA_SBWC_EN |
++	     PP_IDMA_AFBC_EN |
++	     PP_IDMA_BLOCK_EN))
++		return -ENOTSUPP;
++
++	if (rotation)
++		return -ENOTSUPP;
++
++	if (ctrl1 & PP_IDMA_SPLIT_8K_MASK)
++		return -ENOTSUPP;
++
++	if (!source_width || !source_height ||
++	    !width || !height)
++		return -EINVAL;
++
++	if (source_width > 8192 ||
++	    source_height > 8192 ||
++	    width > 8192 ||
++	    height > 8192)
++		return -EINVAL;
++
++	if (source_x + width > source_width ||
++	    source_y + height > source_height)
++		return -EINVAL;
++
++	/*
++	 * For a linear RGB plane, stride0 is the only relevant explicit
++	 * stride selector.
++	 *
++	 * If hardware does not select an explicit plane-0 stride, the
++	 * natural pitch is source_width * cpp.
++	 *
++	 * Reject any other selected stride plane for this first version.
++	 */
++	if (stride_sel & ~1U)
++		return -ENOTSUPP;
++
++	if (stride_sel & 1U)
++		stride = stride1 & 0xffffU;
++	else
++		stride = source_width * cpp;
++
++	if (!stride ||
++	    stride < source_width * cpp)
++		return -EINVAL;
++
++	framebuffer_bytes =
++		(u64)stride * source_height;
++
++	mmap_bytes =
++		PAGE_ALIGN(framebuffer_bytes);
++
++	if (!PAGE_ALIGNED((phys_addr_t)base))
++		return -EINVAL;
++
++	if (!pp_range_inside(
++		    (phys_addr_t)base,
++		    mmap_bytes,
++		    rmem->base,
++		    rmem->size))
++		return -ERANGE;
++
++	memset(out, 0, sizeof(*out));
++
++	out->phys = (phys_addr_t)base;
++
++	out->info.abi_version =
++		PP_FB_ABI_VERSION;
++
++	out->info.hw_format =
++		format;
++
++	out->info.width =
++		width;
++
++	out->info.height =
++		height;
++
++	out->info.source_width =
++		source_width;
++
++	out->info.source_height =
++		source_height;
++
++	out->info.source_x =
++		source_x;
++
++	out->info.source_y =
++		source_y;
++
++	out->info.stride =
++		stride;
++
++	out->info.bytes_per_pixel =
++		cpp;
++
++	out->info.dpp_index =
++		dpp_index;
++
++	out->info.flags =
++		PP_FB_FLAG_LINEAR |
++		PP_FB_FLAG_WRITE_COMBINE;
++
++	out->info.framebuffer_bytes =
++		framebuffer_bytes;
++
++	out->info.mmap_bytes =
++		mmap_bytes;
++
++	pr_info(
++		"pixel_partitioner_fb: candidate dpp=%u phys=%pa "
++		"fmt=%u src=%ux%u+%u+%u image=%ux%u "
++		"stride=%u bytes=%llu\n",
++		dpp_index,
++		&out->phys,
++		format,
++		source_width,
++		source_height,
++		source_x,
++		source_y,
++		width,
++		height,
++		stride,
++		framebuffer_bytes
++	);
++
++	return 0;
++}
++
++static int pp_fb_open(struct inode *inode, struct file *file)
++{
++	if (!pp_ready)
++		return -ENODEV;
++
++	if (READ_ONCE(pp_sealed))
++		return -EPERM;
++
++	return 0;
++}
++
++static ssize_t
++pp_fb_read(struct file *file,
++	   char __user *buffer,
++	   size_t count,
++	   loff_t *position)
++{
++	if (!pp_ready)
++		return -ENODEV;
++
++	return simple_read_from_buffer(
++		buffer,
++		count,
++		position,
++		&pp_active.info,
++		sizeof(pp_active.info)
++	);
++}
++
++static long
++pp_fb_ioctl(struct file *file,
++	    unsigned int command,
++	    unsigned long argument)
++{
++	if (command != PP_FB_IOCTL_SEAL)
++		return -ENOTTY;
++
++	WRITE_ONCE(pp_sealed, true);
++
++	pr_info(
++		"pixel_partitioner_fb: bridge sealed for OS handoff\n"
++	);
++
++	return 0;
++}
++
++static int
++pp_fb_mmap(struct file *file,
++	   struct vm_area_struct *vma)
++{
++	unsigned long length;
++	unsigned long pfn;
++
++	if (!pp_ready)
++		return -ENODEV;
++
++	if (READ_ONCE(pp_sealed))
++		return -EPERM;
++
++	if (!capable(CAP_SYS_RAWIO))
++		return -EPERM;
++
++	if (vma->vm_pgoff != 0)
++		return -EINVAL;
++
++	length =
++		vma->vm_end - vma->vm_start;
++
++	if (!length ||
++	    length > pp_active.info.mmap_bytes)
++		return -EINVAL;
++
++	pfn =
++		(unsigned long)(
++			pp_active.phys >> PAGE_SHIFT
++		);
++
++	vm_flags_set(
++		vma,
++		VM_IO |
++		VM_DONTEXPAND |
++		VM_DONTDUMP
++	);
++
++	vma->vm_page_prot =
++		pgprot_writecombine(
++			vma->vm_page_prot
++		);
++
++	return remap_pfn_range(
++		vma,
++		vma->vm_start,
++		pfn,
++		length,
++		vma->vm_page_prot
++	);
++}
++
++static const struct file_operations pp_fb_fops = {
++	.owner          = THIS_MODULE,
++	.open           = pp_fb_open,
++	.read           = pp_fb_read,
++	.unlocked_ioctl = pp_fb_ioctl,
++#ifdef CONFIG_COMPAT
++	.compat_ioctl   = pp_fb_ioctl,
++#endif
++	.mmap           = pp_fb_mmap,
++	.llseek         = no_llseek,
++};
++
++static struct miscdevice pp_fb_misc = {
++	.minor = MISC_DYNAMIC_MINOR,
++	.name  = "pixel_partitioner_fb",
++	.fops  = &pp_fb_fops,
++	.mode  = 0600,
++};
++
++static int __init pp_fb_init(void)
++{
++	struct device_node *rmem_np;
++	struct device_node *decon_np;
++	struct reserved_mem *rmem;
++	unsigned int dpp_index;
++	unsigned int accepted = 0;
++	int ret;
++
++	/*
++	 * This helper is built into the generic Pixel Partitioner GKI, but
++	 * the cal_9845 RDMA register contract below is GS201-specific.
++	 *
++	 * Refuse all non-GS201 machines before discovering framebuffer
++	 * handover memory or mapping any display registers.
++	 */
++	if (!of_machine_is_compatible("google,gs201"))
++		return 0;
++
++	pr_info(
++		"pixel_partitioner_fb: GS201 runtime identity accepted\n"
++	);
++
++	rmem_np =
++		of_find_compatible_node(
++			NULL,
++			NULL,
++			"exynos,fb_handover"
++		);
++
++	if (!rmem_np)
++		return 0;
++
++	rmem =
++		of_reserved_mem_lookup(rmem_np);
++
++	if (!rmem) {
++		of_node_put(rmem_np);
++		return 0;
++	}
++
++	decon_np =
++		pp_find_handover_decon(
++			rmem_np
++		);
++
++	if (!decon_np) {
++		pr_info(
++			"pixel_partitioner_fb: "
++			"handover memory has no owning DECON\n"
++		);
++		of_node_put(rmem_np);
++		return 0;
++	}
++
++	pr_info(
++		"pixel_partitioner_fb: "
++		"handover=%pa+0x%llx decon=%pOF\n",
++		&rmem->base,
++		(unsigned long long)rmem->size,
++		decon_np
++	);
++
++	for (dpp_index = 0;
++	     dpp_index < 16;
++	     ++dpp_index) {
++		struct device_node *dpp_np;
++		struct pp_candidate candidate;
++
++		dpp_np =
++			of_parse_phandle(
++				decon_np,
++				"dpps",
++				dpp_index
++			);
++
++		if (!dpp_np)
++			break;
++
++		ret =
++			pp_decode_dpp(
++				dpp_np,
++				dpp_index,
++				rmem,
++				&candidate
++			);
++
++		pr_info(
++			"pixel_partitioner_fb: "
++			"dpp=%u node=%pOF decode=%d\n",
++			dpp_index,
++			dpp_np,
++			ret
++		);
++
++		of_node_put(dpp_np);
++
++		if (ret)
++			continue;
++
++		pp_active = candidate;
++		accepted++;
++	}
++
++	of_node_put(decon_np);
++	of_node_put(rmem_np);
++
++	/*
++	 * Ambiguity is a hard failure.
++	 *
++	 * We never guess which bootloader buffer is live.
++	 */
++	if (accepted != 1) {
++		pr_warn(
++			"pixel_partitioner_fb: "
++			"refusing ambiguous scanout candidates=%u\n",
++			accepted
++		);
++
++		memset(
++			&pp_active,
++			0,
++			sizeof(pp_active)
++		);
++
++		return 0;
++	}
++
++	ret = misc_register(&pp_fb_misc);
++	if (ret) {
++		pr_err(
++			"pixel_partitioner_fb: "
++			"misc_register failed=%d\n",
++			ret
++		);
++
++		memset(
++			&pp_active,
++			0,
++			sizeof(pp_active)
++		);
++
++		return ret;
++	}
++
++	pp_ready = true;
++
++	pr_info(
++		"PIXEL_PARTITIONER_FB_READY "
++		"dpp=%u format=%u "
++		"src=%ux%u offset=%u,%u "
++		"visible=%ux%u stride=%u "
++		"phys=%pa mmap=%llu\n",
++		pp_active.info.dpp_index,
++		pp_active.info.hw_format,
++		pp_active.info.source_width,
++		pp_active.info.source_height,
++		pp_active.info.source_x,
++		pp_active.info.source_y,
++		pp_active.info.width,
++		pp_active.info.height,
++		pp_active.info.stride,
++		&pp_active.phys,
++		pp_active.info.mmap_bytes
++	);
++
++	return 0;
++}
++
++device_initcall(pp_fb_init);
++
++MODULE_DESCRIPTION(
++	"Pixel Partitioner GS201 bootloader framebuffer bridge"
++);
++MODULE_LICENSE("GPL");
