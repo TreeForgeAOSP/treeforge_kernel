@@ -9,8 +9,6 @@
   <project name="platform/build/bazel_common_rules" path="build/bazel_common_rules" revision="b4f0919269ec78d28ec32a34ca90e107c3a41f4e" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1" />
   <project name="kernel/build" path="build/kernel" revision="560e3751ab4d1d96e0db51e860f6437b41786c28" upstream="refs/tags/android-15.0.0_r0.94" clone-depth="1">
     <linkfile src="kleaf/bazel.sh" dest="tools/bazel" />
-    <linkfile src="build.sh" dest="build/build.sh" />
-    <linkfile src="build_abi.sh" dest="build/build_abi.sh" />
     <linkfile src="build_test.sh" dest="build/build_test.sh" />
     <linkfile src="build_utils.sh" dest="build/build_utils.sh" />
     <linkfile src="config.sh" dest="build/config.sh" />
