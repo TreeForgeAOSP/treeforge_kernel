@@ -1,0 +1,23 @@
+{
+  "description": "Source + TreeForge Bootstrap framebuffer bridge",
+  "device": "tangorpro",
+  "id": "treeforge-bootstrap",
+  "kernel_release": "android-15.0.0_r0.94",
+  "label": "TreeForge Bootstrap",
+  "patches": [
+    {
+      "base_revision": "c151586fe27836b2993f431368f2c314a193afdb",
+      "patch": "profiles/treeforge-bootstrap/patches/kernel-common/0001-treeforge-bootstrap-framebuffer.patch",
+      "repository": "aosp",
+      "sha256": "5f94da96ea1073422c0d8beef090c61bf4ac8fa89bb22f862ff8caac4a96d0d8"
+    },
+    {
+      "base_revision": "5073cf65f352ddaba705fcbdf09c5f99b10d3acc",
+      "patch": "profiles/treeforge-bootstrap/patches/gs201/0001-enable-treeforge-bootstrap-framebuffer.patch",
+      "repository": "private/devices/google/gs201",
+      "sha256": "59a184f3b035b8a7de10a0aa5d658469eefdc3cba2298276c34b4fec20854f96"
+    }
+  ],
+  "schema": 1,
+  "source_lock": "provenance/google/android-15.0.0_r0.94/SOURCE_LOCK.json"
+}

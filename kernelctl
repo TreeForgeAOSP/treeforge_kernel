@@ -85,6 +85,7 @@ class KernelCtlError(RuntimeError):
 BUILD_PROFILE_ORDER = (
     "source",
     "pixel-partitioner",
+    "treeforge-bootstrap",
 )
 
 
@@ -99,6 +100,12 @@ BUILD_PROFILES = {
         "label": "Pixel Partitioner",
         "description": (
             "Source + Pixel Partitioner framebuffer bridge"
+        ),
+    },
+    "treeforge-bootstrap": {
+        "label": "TreeForge Bootstrap",
+        "description": (
+            "Source + TreeForge Bootstrap framebuffer bridge"
         ),
     },
 }
