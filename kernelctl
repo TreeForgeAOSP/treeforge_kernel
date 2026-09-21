@@ -2248,7 +2248,16 @@ def build_environment_plan(contract: dict) -> dict:
 def kernel_bazel_command(raw_dir: Path):
     bazel = ROOT / "tools" / "bazel"
 
+    workspace_status = (
+        ROOT
+        / "provenance"
+        / "google"
+        / "android-15.0.0_r0.94"
+        / "workspace-status.sh"
+    )
+
     need_file(bazel)
+    need_file(workspace_status)
 
     return [
         bazel,
@@ -2259,6 +2268,7 @@ def kernel_bazel_command(raw_dir: Path):
         "--config=no_download_gki",
         "--config=no_download_gki_fips140",
         "--config=no_internet",
+        f"--workspace_status_command={workspace_status}",
         "//private/devices/google/tangorpro:gs201_tangorpro_dist",
         "--",
         f"--dist_dir={raw_dir}",
@@ -2271,6 +2281,7 @@ def build_child_environment(contract: dict) -> tuple[dict, dict]:
     env = os.environ.copy()
 
     env["JAVA_HOME"] = str(plan["java_home"])
+    env["BUILD_NUMBER"] = "13202328"
 
     path_parts = [
         *plan["path_prefix"],
