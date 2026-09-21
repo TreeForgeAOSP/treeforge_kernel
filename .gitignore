@@ -53,3 +53,4 @@
 /tools/treeforge/**/__pycache__/
 *.pyc
 *.pyo
+.providers/

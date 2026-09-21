@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "source_repository": "git@github.com:TreeForgeDEV/treeforge_toolchain.git",
+  "source_repository": "git@github.com:TreeForgeAOSP/treeforge_toolchain.git",
   "source_commit": "5f0672c3b83fdb22989a8bb03f60d19cb1822615",
   "source_commit_role": "base",
   "source_relation": "derived",

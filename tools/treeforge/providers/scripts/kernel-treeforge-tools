@@ -17,29 +17,26 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = ROOT.parents[2]
+PROJECT_PROVIDER_ROOT = (
+    PROJECT_ROOT
+    / ".providers"
+)
 
 LOCK_PATH = ROOT / "host-tools.lock.json"
 
 DEFAULT_CACHE_ROOT = (
-    Path.home()
-    / ".cache"
-    / "treeforge"
-    / "android-host-provider"
+    PROJECT_PROVIDER_ROOT
 )
 
 DEFAULT_ARCHIVE_CACHE = (
-    Path.home()
-    / ".cache"
-    / "treeforge"
-    / "provider-archives"
+    PROJECT_PROVIDER_ROOT
+    / ".archives"
 )
 
 DEFAULT_CONTRACT = (
-    Path.home()
-    / ".cache"
-    / "treeforge"
-    / "providers"
-    / "kernel"
+    PROJECT_PROVIDER_ROOT
+    / ".state"
     / "treeforge-tools.json"
 )
 

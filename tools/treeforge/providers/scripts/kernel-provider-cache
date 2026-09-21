@@ -12,13 +12,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = ROOT.parents[2]
+
 DEFAULT_RELEASE = "android-15.0.0_r0.94"
+
 DEFAULT_CACHE_ROOT = (
-    Path.home()
-    / ".cache"
-    / "treeforge"
-    / "providers"
-    / "kernel"
+    PROJECT_ROOT
+    / ".providers"
+    / "google-kernel"
 )
 
 

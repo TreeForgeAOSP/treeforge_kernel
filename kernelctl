@@ -47,15 +47,15 @@ KERNEL_PROVIDER_ROOT = (
 )
 
 KERNEL_PROVIDER_CACHE = (
-    Path.home()
-    / ".cache"
-    / "treeforge"
-    / "providers"
-    / "kernel"
+    ROOT
+    / ".providers"
+    / "google-kernel"
 )
 
 TREEFORGE_TOOLS_CONTRACT = (
-    KERNEL_PROVIDER_CACHE
+    ROOT
+    / ".providers"
+    / ".state"
     / "treeforge-tools.json"
 )
 
@@ -1552,14 +1552,41 @@ def patch_state(
     if not repository.is_dir():
         return "repository-missing"
 
-    head = repository_head(
-        repository
+    head = git_capture(
+        repository,
+        "rev-parse",
+        "HEAD",
     )
 
-    if head != record[
+    if head.returncode != 0:
+        raise KernelCtlError(
+            "unable to inspect managed kernel "
+            "repository revision:\n"
+            + head.stdout
+        )
+
+    actual_revision = (
+        head.stdout.strip()
+    )
+
+    expected_revision = record[
         "base_revision"
-    ]:
+    ]
+
+    # A managed patch belongs only to the source baseline
+    # declared by its profile.  Profiles may intentionally
+    # use different frozen kernel baselines, so a patch from
+    # another baseline must not be tested for applicability
+    # against the active source tree.
+    if actual_revision != expected_revision:
         return "base-revision-mismatch"
+
+    forward = git_capture(
+        repository,
+        "apply",
+        "--check",
+        str(patch),
+    )
 
     reverse = git_capture(
         repository,
@@ -1569,29 +1596,21 @@ def patch_state(
         str(patch),
     )
 
-    forward = git_capture(
-        repository,
-        "apply",
-        "--check",
-        str(patch),
+    forward_ok = (
+        forward.returncode == 0
     )
 
-    if (
+    reverse_ok = (
         reverse.returncode == 0
-        and forward.returncode != 0
-    ):
-        return "applied"
+    )
 
-    if (
-        forward.returncode == 0
-        and reverse.returncode != 0
-    ):
+    if forward_ok and not reverse_ok:
         return "pristine"
 
-    if (
-        reverse.returncode == 0
-        and forward.returncode == 0
-    ):
+    if reverse_ok and not forward_ok:
+        return "applied"
+
+    if forward_ok and reverse_ok:
         raise KernelCtlError(
             "ambiguous kernel profile patch state: "
             f"{patch}"
