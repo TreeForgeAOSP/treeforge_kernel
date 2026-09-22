@@ -22,6 +22,12 @@
       "patch": "profiles/treeforge-stage1/patches/gs201/0001-enable-treeforge-bootstrap-framebuffer.patch",
       "repository": "private/devices/google/gs201",
       "sha256": "59a184f3b035b8a7de10a0aa5d658469eefdc3cba2298276c34b4fec20854f96"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-stage1/patches/kernel-common/0003-enable-kexec.patch",
+      "repository": "aosp",
+      "sha256": "2d2732a468ef027cc63225040e0b47475b3485cc3c983ca5c95fc1d7146736d6"
     }
   ],
   "schema": 1,

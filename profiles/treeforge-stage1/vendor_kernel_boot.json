@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "device": "tangorpro",
+  "profile": "treeforge-stage1",
+  "partition_size": 67108864,
+  "input_sha256": [
+    "4b489749d5a58967178d65210dbd2a7fa7e8da7bf0e6eba43ec0f4805cc979c9"
+  ],
+  "header": {
+    "version": 4,
+    "page_size": 2048,
+    "kernel_offset": 268468224,
+    "ramdisk_offset": 285212672,
+    "tags_offset": 268435712,
+    "dtb_offset": 300941312,
+    "dtb_size": 886016,
+    "bootconfig_size": 0
+  },
+  "input_module_count": 193,
+  "output_module_count": 192,
+  "remove_modules": [
+    "fips140.ko"
+  ],
+  "replace_modules": [
+    "arm_dsu_pmu.ko",
+    "at24.ko",
+    "drm_display_helper.ko",
+    "eh.ko",
+    "i2c-dev.ko",
+    "leds-pwm.ko",
+    "lp855x_bl.ko",
+    "pixel-boot-metrics.ko",
+    "pixel-debug-test.ko",
+    "pixel-suspend-diag.ko",
+    "pixel_em.ko",
+    "pixel_metrics.ko",
+    "pixel_stat_sysfs.ko",
+    "rt4801-regulator.ko",
+    "sbb-mux.ko",
+    "sg.ko",
+    "softdog.ko",
+    "spidev.ko",
+    "tps65132-regulator.ko",
+    "vh_mm.ko",
+    "zsmalloc.ko"
+  ],
+  "preserve_metadata": [
+    "modules.alias",
+    "modules.dep",
+    "modules.softdep"
+  ]
+}

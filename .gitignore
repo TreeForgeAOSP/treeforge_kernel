@@ -54,3 +54,6 @@
 *.pyc
 *.pyo
 .providers/
+
+# TreeForge Stage-1 host tooling
+!/tools/stage1_vendor_kernel_boot.py
