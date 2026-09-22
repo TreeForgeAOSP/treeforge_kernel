@@ -1,0 +1,29 @@
+{
+  "description": "Dedicated TreeForge first-stage boot-manager kernel",
+  "device": "tangorpro",
+  "id": "treeforge-stage1",
+  "kernel_release": "android-15.0.0_r0.94",
+  "label": "TreeForge Stage-1",
+  "patches": [
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-stage1/patches/kernel-common/0001-treeforge-bootstrap-framebuffer.patch",
+      "repository": "aosp",
+      "sha256": "5f94da96ea1073422c0d8beef090c61bf4ac8fa89bb22f862ff8caac4a96d0d8"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-stage1/patches/kernel-common/0002-trust-stock-gki-module-certificate.patch",
+      "repository": "aosp",
+      "sha256": "9dae7028b5ec5e103286732b1d6008510aa59d01242dccdeb9e08ea6b7538e18"
+    },
+    {
+      "base_revision": "966a2828ccce06078e59e7374c9c68cbe6089004",
+      "patch": "profiles/treeforge-stage1/patches/gs201/0001-enable-treeforge-bootstrap-framebuffer.patch",
+      "repository": "private/devices/google/gs201",
+      "sha256": "59a184f3b035b8a7de10a0aa5d658469eefdc3cba2298276c34b4fec20854f96"
+    }
+  ],
+  "schema": 1,
+  "source_lock": "provenance/google/treeforge-stage1/android-15.0.0_r0.94/SOURCE_LOCK.json"
+}

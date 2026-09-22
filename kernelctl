@@ -86,6 +86,7 @@ BUILD_PROFILE_ORDER = (
     "source",
     "pixel-partitioner",
     "treeforge-bootstrap",
+    "treeforge-stage1",
 )
 
 
@@ -108,6 +109,13 @@ BUILD_PROFILES = {
             "Source + TreeForge Bootstrap framebuffer bridge"
         ),
     },
+    "treeforge-stage1": {
+        "label": "TreeForge Stage-1",
+        "description": (
+            "Dedicated TreeForge first-stage boot-manager kernel"
+        ),
+    },
+
 }
 
 

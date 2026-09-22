@@ -1,0 +1,96 @@
+{
+  "device": "tangorpro",
+  "excluded_google_prebuilts": [
+    "kernel/prebuilts/build-tools",
+    "platform/prebuilts/bazel/linux-x86_64",
+    "platform/prebuilts/build-tools",
+    "platform/prebuilts/clang/host/linux-x86",
+    "platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8",
+    "platform/prebuilts/jdk/jdk11",
+    "toolchain/prebuilts/ndk/r23"
+  ],
+  "kernel_release": "android-15.0.0_r0.94",
+  "manifest": "manifests/tangorpro-android15-r094.xml",
+  "projects": {
+    "aosp": {
+      "name": "kernel/common",
+      "revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb"
+    },
+    "build/bazel_common_rules": {
+      "name": "platform/build/bazel_common_rules",
+      "revision": "b4f0919269ec78d28ec32a34ca90e107c3a41f4e"
+    },
+    "build/kernel": {
+      "name": "kernel/build",
+      "revision": "560e3751ab4d1d96e0db51e860f6437b41786c28"
+    },
+    "external/bazel-skylib": {
+      "name": "platform/external/bazel-skylib",
+      "revision": "f998e5dc13c03f0eae9e373263d3afff0932c738"
+    },
+    "external/python/absl-py": {
+      "name": "platform/external/python/absl-py",
+      "revision": "2f199605a9875340569e039657f8b4c72d51b84d"
+    },
+    "external/stardoc": {
+      "name": "platform/external/stardoc",
+      "revision": "e83f522ee95419e55d2c5654aa6e0143beeef595"
+    },
+    "kernel/configs": {
+      "name": "kernel/configs",
+      "revision": "0950b8c2d3f35199d3f103d107d6225dc97ced6f"
+    },
+    "private/devices/google/common": {
+      "name": "kernel/devices/google/common",
+      "revision": "6fd029d842eb590fa7d1fba3ad7da6f835e45182"
+    },
+    "private/devices/google/gs201": {
+      "name": "kernel/devices/google/gs201",
+      "revision": "966a2828ccce06078e59e7374c9c68cbe6089004"
+    },
+    "private/devices/google/tangorpro": {
+      "name": "kernel/devices/google/tangorpro",
+      "revision": "59acb881f4ef23fd1b3388a5d401fea08c5ac36f"
+    },
+    "private/google-modules/bms": {
+      "name": "kernel/google-modules/bms",
+      "revision": "2a3ea226888e05a676d356be52f33c921ee27fcf"
+    },
+    "private/google-modules/display/common": {
+      "name": "kernel/google-modules/display/common",
+      "revision": "67668278c368bbcc1d36c9af14619aba37c6e24d"
+    },
+    "private/google-modules/display/samsung": {
+      "name": "kernel/google-modules/display/samsung",
+      "revision": "7bb530d6f4a3acb7858e73026202739a5fe9a57e"
+    },
+    "private/google-modules/power/mitigation": {
+      "name": "kernel/google-modules/power/mitigation",
+      "revision": "2e5f25d1026f40be2d79afd1ab958eba86d9ad1f"
+    },
+    "private/google-modules/power/reset": {
+      "name": "kernel/google-modules/power/reset",
+      "revision": "c8c87dd61758b207ee2b7f973cfa0aa0584b867c"
+    },
+    "private/google-modules/soc/gs": {
+      "name": "kernel/google-modules/soc/gs",
+      "revision": "5c48566f5564edbe69c2ea7c0b1dda9ce96a8816"
+    },
+    "private/google-modules/touch/common": {
+      "name": "kernel/google-modules/touch/common",
+      "revision": "5b37ddff6b9e06e40cec2c094ec4d64882b222bc"
+    },
+    "private/google-modules/trusty": {
+      "name": "kernel/google-modules/trusty",
+      "revision": "49b22cf8be519c81936b86d64416e0839a4e831f"
+    },
+    "tools/mkbootimg": {
+      "name": "platform/system/tools/mkbootimg",
+      "revision": "615a1fced5f8e2755642d30357674d3bfa21b85e"
+    }
+  },
+  "revision_tag": "refs/tags/android-15.0.0_r0.94",
+  "schema": 1,
+  "upstream_manifest": "https://android.googlesource.com/kernel/manifest",
+  "upstream_manifest_branch": "android-gs-tangorpro-6.1-android15-qpr2-beta"
+}
