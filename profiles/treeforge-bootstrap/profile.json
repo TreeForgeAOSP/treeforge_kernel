@@ -1,6 +1,7 @@
 {
   "description": "Source + TreeForge Bootstrap framebuffer bridge",
   "device": "tangorpro",
+  "hardware_accepted_boot_sha256": "59d9103f7c9e343a96af6d37f9307f4610db7d228976b9d67ac59fab00bcf20b",
   "id": "treeforge-bootstrap",
   "kernel_release": "android-15.0.0_r0.94",
   "label": "TreeForge Bootstrap",
@@ -16,6 +17,12 @@
       "patch": "profiles/treeforge-bootstrap/patches/kernel-common/0002-trust-stock-gki-module-certificate.patch",
       "repository": "aosp",
       "sha256": "9dae7028b5ec5e103286732b1d6008510aa59d01242dccdeb9e08ea6b7538e18"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-bootstrap/patches/kernel-common/0003-disable-pkvm-for-bootstrap.patch",
+      "repository": "aosp",
+      "sha256": "0b1605429272b1f2b91eaf42faa693f9930d5d086067b2a21e7aa45fc2fdccb8"
     },
     {
       "base_revision": "966a2828ccce06078e59e7374c9c68cbe6089004",

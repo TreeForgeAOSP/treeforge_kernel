@@ -1,9 +1,0 @@
-diff --git a/gs201_defconfig b/gs201_defconfig
-index 8dddbf4..e0c3cd4 100644
---- a/gs201_defconfig
-+++ b/gs201_defconfig
-@@ -252,3 +252,4 @@ CONFIG_PIXEL_POWER_REBOOT=m
- CONFIG_TRUSTY=m
- CONFIG_TRUSTY_DMA_BUF_FFA_TAG=y
- CONFIG_TRUSTY_CRASH_IS_PANIC=y
-+CONFIG_PIXEL_PARTITIONER_FB=y

@@ -1,0 +1,12 @@
+diff --git a/arch/arm64/configs/gki_defconfig b/arch/arm64/configs/gki_defconfig
+--- a/arch/arm64/configs/gki_defconfig
++++ b/arch/arm64/configs/gki_defconfig
+@@ -66,7 +66,7 @@
+ CONFIG_RANDOMIZE_BASE=y
+ # CONFIG_RANDOMIZE_MODULE_REGION_FULL is not set
+ CONFIG_UNWIND_PATCH_PAC_INTO_SCS=y
+-CONFIG_CMDLINE="console=ttynull stack_depot_disable=on cgroup_disable=pressure kasan.page_alloc.sample=10 kasan.stacktrace=off kvm-arm.mode=protected bootconfig ioremap_guard"
++CONFIG_CMDLINE="console=ttynull stack_depot_disable=on cgroup_disable=pressure kasan.page_alloc.sample=10 kasan.stacktrace=off kvm-arm.mode=none bootconfig ioremap_guard"
+ CONFIG_CMDLINE_EXTEND=y
+ # CONFIG_DMI is not set
+ CONFIG_HIBERNATION=y

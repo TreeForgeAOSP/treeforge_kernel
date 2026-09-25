@@ -84,9 +84,7 @@ class KernelCtlError(RuntimeError):
 
 BUILD_PROFILE_ORDER = (
     "source",
-    "pixel-partitioner",
     "treeforge-bootstrap",
-    "treeforge-stage1",
 )
 
 
@@ -97,22 +95,10 @@ BUILD_PROFILES = {
             "Canonical Google tangorpro kernel"
         ),
     },
-    "pixel-partitioner": {
-        "label": "Pixel Partitioner",
-        "description": (
-            "Source + Pixel Partitioner framebuffer bridge"
-        ),
-    },
     "treeforge-bootstrap": {
         "label": "TreeForge Bootstrap",
         "description": (
             "Source + TreeForge Bootstrap framebuffer bridge"
-        ),
-    },
-    "treeforge-stage1": {
-        "label": "TreeForge Stage-1",
-        "description": (
-            "Dedicated TreeForge first-stage boot-manager kernel"
         ),
     },
 

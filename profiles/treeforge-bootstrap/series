@@ -1,3 +1,4 @@
 aosp patches/kernel-common/0001-treeforge-bootstrap-framebuffer.patch
 aosp patches/kernel-common/0002-trust-stock-gki-module-certificate.patch
+aosp patches/kernel-common/0003-disable-pkvm-for-bootstrap.patch
 private/devices/google/gs201 patches/gs201/0001-enable-treeforge-bootstrap-framebuffer.patch
