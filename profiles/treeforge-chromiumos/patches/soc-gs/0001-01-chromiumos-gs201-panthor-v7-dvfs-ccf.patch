@@ -1,0 +1,56 @@
+diff --git a/drivers/clk/gs/clk-gs201.c b/drivers/clk/gs/clk-gs201.c
+index 2e17bc90644715382c8c121bf95f7652288fe641..78acfbdf0f9f74759c97cadc38ceaabd085c68d2 100644
+--- a/drivers/clk/gs/clk-gs201.c
++++ b/drivers/clk/gs/clk-gs201.c
+@@ -258,6 +258,27 @@ static struct init_vclk gs201_g3d_hwacg_vclks[] = {
+ 		NULL),
+ };
+ 
++/*
++ * TreeForge ChromiumOS:
++ * expose the existing ACPM GPU DVFS domains through CCF so
++ * generic Panthor can use clk_get_rate()/clk_set_rate().
++ */
++static struct init_vclk gs201_g3d_dvfs_vclks[] = {
++	VCLK(CLK_G3D_DVFS,
++	     ACPM_DVFS_G3D,
++	     "CLK_G3D_DVFS",
++	     0,
++	     VCLK_DFS,
++	     NULL),
++	VCLK(CLK_G3DL2_DVFS,
++	     ACPM_DVFS_G3DL2,
++	     "CLK_G3DL2_DVFS",
++	     0,
++	     VCLK_DFS,
++	     NULL),
++};
++
++
+ static struct init_vclk gs201_dpu_hwacg_vclks[] = {
+ 	HWACG_VCLK(UMUX_CLKCMU_DPU_NOC,
+ 		MUX_CLKCMU_DPU_NOC_USER,
+@@ -1722,6 +1743,10 @@ static int gs201_clock_probe(struct platform_device *pdev)
+ 	samsung_register_vclk(gs201_clk_provider,
+ 				gs201_g3d_hwacg_vclks,
+ 				ARRAY_SIZE(gs201_g3d_hwacg_vclks));
++
++	samsung_register_vclk(gs201_clk_provider,
++			      gs201_g3d_dvfs_vclks,
++			      ARRAY_SIZE(gs201_g3d_dvfs_vclks));
+ 	samsung_register_vclk(gs201_clk_provider,
+ 				gs201_dpu_hwacg_vclks,
+ 				ARRAY_SIZE(gs201_dpu_hwacg_vclks));
+diff --git a/include/dt-bindings/clock/gs201.h b/include/dt-bindings/clock/gs201.h
+index 5287e446a3743844a89bfff6c425db61c9cdbbc4..20f6676775955efea59aebcc8c74e5aabe605f57 100644
+--- a/include/dt-bindings/clock/gs201.h
++++ b/include/dt-bindings/clock/gs201.h
+@@ -79,6 +79,8 @@
+ #define GATE_GPU			(CLK_G3D_BASE + 0)
+ 
+ 
++#define CLK_G3D_DVFS			(CLK_G3D_BASE + 1)
++#define CLK_G3DL2_DVFS			(CLK_G3D_BASE + 2)
+ #define CLK_DPU_BASE			(400)
+ #define UMUX_CLKCMU_DPU_NOC		(CLK_DPU_BASE + 0)
+ #define GATE_DPUF_DMA			(CLK_DPU_BASE + 1)

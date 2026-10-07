@@ -1,0 +1,490 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+PANTHOR = ("gpu-sched.ko", "drm_exec.ko", "drm_gpuvm.ko", "panthor.ko")
+
+
+class ReleaseError(RuntimeError):
+    pass
+
+
+def need(path: Path) -> Path:
+    if not path.is_file():
+        raise ReleaseError(f"required file missing: {path}")
+    return path
+
+
+def command(name: str) -> str:
+    value = shutil.which(name)
+    if not value:
+        raise ReleaseError(f"required command not found: {name}")
+    return value
+
+
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def run(args, *, capture=False) -> subprocess.CompletedProcess:
+    result = subprocess.run(
+        [str(x) for x in args],
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
+        check=False,
+    )
+    if result.returncode:
+        detail = ""
+        if capture:
+            detail = "\n" + (result.stdout or "") + (result.stderr or "")
+        raise ReleaseError(
+            f"command failed ({result.returncode}): "
+            + " ".join(str(x) for x in args)
+            + detail
+        )
+    return result
+
+
+def latest_generation(root: Path) -> Path:
+    base = root / "out" / "source"
+    candidates = [
+        p for p in base.iterdir()
+        if p.is_dir()
+        and (p / "package" / "boot.img").is_file()
+        and (p / "package" / "vendor_dlkm.img").is_file()
+        and (p / "package" / "system_dlkm.img").is_file()
+    ] if base.is_dir() else []
+    if not candidates:
+        raise ReleaseError("no completed packaged kernel generation found")
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def version_value(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", value):
+        raise ReleaseError(f"invalid release version: {value!r}")
+    return value
+
+
+def sparse(path: Path) -> bool:
+    with path.open("rb") as stream:
+        return stream.read(4) == b"\x3a\xff\x26\xed"
+
+
+def dump_fs(image: Path, target: Path) -> None:
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+
+    source = image
+    converted = target.parent / f".{image.name}.raw"
+    try:
+        if sparse(image):
+            run([command("simg2img"), image, converted], capture=True)
+            source = converted
+        run(
+            [command("debugfs"), "-R", f"rdump / {target}", source],
+            capture=True,
+        )
+    finally:
+        if converted.exists():
+            converted.unlink()
+
+
+def modules_root(extract: Path) -> Path:
+    candidates = [
+        p for p in extract.rglob("modules")
+        if p.is_dir()
+        and p.parent.name == "lib"
+        and any(p.rglob("*.ko"))
+    ]
+    if len(candidates) != 1:
+        raise ReleaseError(
+            f"expected one lib/modules tree in {extract}, "
+            f"found {len(candidates)}"
+        )
+    return candidates[0]
+
+
+def modinfo(path: Path) -> dict[str, str]:
+    text = run([command("modinfo"), path], capture=True).stdout
+    values = {}
+    wanted = {"license", "vermagic", "depends", "signer", "sig_key"}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if key in wanted and key not in values:
+            values[key] = value.strip()
+    return {key: values.get(key, "") for key in wanted}
+
+
+def tar_zst(parent: Path, name: str, output: Path) -> None:
+    if output.exists():
+        output.unlink()
+    run([
+        command("tar"),
+        "--sort=name",
+        "--mtime=@0",
+        "--owner=0",
+        "--group=0",
+        "--numeric-owner",
+        "-I", "zstd -T0 -15",
+        "-cf", output,
+        "-C", parent,
+        name,
+    ])
+    need(output)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Create local TreeForge kernel release assets only."
+    )
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--generation", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args()
+
+    root = args.root.expanduser().resolve()
+    version = version_value(args.version)
+    generation = (
+        args.generation.expanduser().resolve()
+        if args.generation else latest_generation(root)
+    )
+    package = generation / "package"
+
+    for name in ("boot.img", "vendor_dlkm.img", "system_dlkm.img"):
+        need(package / name)
+
+    build_json = generation / "metadata" / "build.json"
+    build = json.loads(build_json.read_text()) if build_json.is_file() else {}
+    profile = build.get("build_profile")
+    if profile not in (None, "treeforge-bootstrap"):
+        raise ReleaseError(
+            "release packaging requires treeforge-bootstrap; "
+            f"generation profile is {profile!r}"
+        )
+
+    baseline_path = (
+        root / "provenance" / "google" / "treeforge-bootstrap"
+        / "android-15.0.0_r0.94" / "module-provider-baseline.json"
+    )
+    baseline = json.loads(need(baseline_path).read_text())
+    if baseline.get("schema") != 1 or baseline.get("device") != "tangorpro":
+        raise ReleaseError("module-provider baseline contract mismatch")
+
+    output = (
+        args.output.expanduser().resolve()
+        if args.output else root / "out" / "releases" / version
+    )
+    if output.exists():
+        if not args.force:
+            raise ReleaseError(
+                f"release output exists; use --force: {output}"
+            )
+        shutil.rmtree(output)
+
+    assets = output / "assets"
+    stage = output / ".stage"
+    extract = stage / "extract"
+    provider_name = (
+        f"treeforge-kernel-modules-tangorpro-android15-{version}"
+    )
+    provider = stage / provider_name
+    assets.mkdir(parents=True)
+    provider.mkdir(parents=True)
+    extract.mkdir(parents=True)
+
+    boot = assets / "boot.img"
+    shutil.copy2(package / "boot.img", boot)
+
+    carriers = {}
+    all_abis = set()
+    locations: dict[str, list[Path]] = {}
+    total = 0
+
+    for carrier in ("vendor_dlkm", "system_dlkm"):
+        image = package / f"{carrier}.img"
+        fs = extract / carrier
+        print(f"Extracting {carrier}: {image}")
+        dump_fs(image, fs)
+        src_modules = modules_root(fs)
+        dst_modules = provider / "payload" / carrier / "lib" / "modules"
+        shutil.copytree(
+            src_modules, dst_modules, symlinks=True, dirs_exist_ok=True
+        )
+
+        modules = []
+        for ko in sorted(dst_modules.rglob("*.ko")):
+            if ko.is_symlink():
+                continue
+            info = modinfo(ko)
+            abi = info["vermagic"].split()[0] if info["vermagic"] else ""
+            if not abi:
+                raise ReleaseError(f"module has no vermagic ABI: {ko}")
+            all_abis.add(abi)
+            relative = ko.relative_to(provider).as_posix()
+            modules.append({
+                "path": relative,
+                "sha256": sha256(ko),
+                "bytes": ko.stat().st_size,
+                **info,
+            })
+            locations.setdefault(ko.name, []).append(ko)
+
+        if not modules:
+            raise ReleaseError(f"{carrier}: zero modules extracted")
+        total += len(modules)
+
+        files = []
+        for path in sorted(dst_modules.rglob("*")):
+            rel = path.relative_to(provider).as_posix()
+            if path.is_symlink():
+                files.append({
+                    "path": rel,
+                    "type": "symlink",
+                    "target": os.readlink(path),
+                })
+            elif path.is_file():
+                files.append({
+                    "path": rel,
+                    "type": "file",
+                    "bytes": path.stat().st_size,
+                    "sha256": sha256(path),
+                })
+
+        carriers[carrier] = {
+            "module_count": len(modules),
+            "source_image_sha256": sha256(image),
+            "modules": modules,
+            "files": files,
+        }
+        print(f"{carrier}: {len(modules)} modules")
+
+    if len(all_abis) != 1:
+        raise ReleaseError(
+            "module family contains multiple ABIs: "
+            + ", ".join(sorted(all_abis))
+        )
+    abi = next(iter(all_abis))
+
+    manifest = {
+        "schema": "treeforge.kernel.module-provider.v1",
+        "release": version,
+        "target": "tangorpro",
+        "android_base": "android15",
+        "kernel_provider_release": "android-15.0.0_r0.94",
+        "generation": str(generation),
+        "build_profile": profile,
+        "kernel_abi": abi,
+        "boot_sha256": sha256(boot),
+        "supported_baseline": baseline["supported_baseline"],
+        "module_count": total,
+        "reconstruction": {
+            "module_tree_policy": "replace_exact",
+            "regenerate_module_metadata": True,
+            "partition_images_distributed": False,
+            "owner_avb": "local-device-owner-resign",
+        },
+        "carriers": carriers,
+    }
+    manifest_path = provider / "module-provider.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    )
+
+    with (provider / "MODULE_SHA256SUMS").open("w") as stream:
+        for carrier in ("vendor_dlkm", "system_dlkm"):
+            for rec in carriers[carrier]["modules"]:
+                stream.write(f"{rec['sha256']}  {rec['path']}\n")
+
+    (provider / "README.md").write_text(
+        "# TreeForge Kernel module provider\n\n"
+        f"Release: {version}\n"
+        "Target: Pixel Tablet (tangorpro)\n"
+        f"Kernel ABI: {abi}\n\n"
+        "This is a provider, not a flashable partition image. "
+        "Consumers reconstruct DLKM images locally and owner-sign them.\n"
+    )
+
+    standalone = assets / "module-provider.json"
+    shutil.copy2(manifest_path, standalone)
+
+    module_archive = assets / f"{provider_name}.tar.zst"
+    tar_zst(stage, provider_name, module_archive)
+
+    #
+    # ChromiumOS Panthor provider
+    # ---------------------------
+    # These modules are not members of Android's vendor_dlkm/system_dlkm
+    # image trees. Kleaf emits them as standalone modules in raw/. Keep
+    # the Android coherent family independent, but package the matching
+    # four-module Panthor family from this exact generation when present.
+    #
+    panthor_archive = None
+    raw = generation / "raw"
+
+    found = {
+        name: sorted(
+            p for p in raw.rglob(name)
+            if p.is_file()
+        )
+        for name in PANTHOR
+    }
+
+    present = [
+        name
+        for name, paths in found.items()
+        if paths
+    ]
+
+    if present:
+        missing = [
+            name
+            for name, paths in found.items()
+            if not paths
+        ]
+
+        ambiguous = [
+            name
+            for name, paths in found.items()
+            if len(paths) != 1
+        ]
+
+        if missing or ambiguous:
+            raise ReleaseError(
+                "Panthor raw module family is incomplete/ambiguous: "
+                f"missing={missing} ambiguous={ambiguous}"
+            )
+
+        pname = (
+            "treeforge-kernel-panthor-"
+            f"tangorpro-android15-{version}"
+        )
+
+        pstage = stage / pname
+        pstage.mkdir()
+
+        entries = []
+
+        for name in PANTHOR:
+            source = found[name][0]
+            info = modinfo(source)
+
+            module_abi = (
+                info["vermagic"].split()[0]
+                if info["vermagic"]
+                else ""
+            )
+
+            if module_abi != abi:
+                raise ReleaseError(
+                    f"{name}: Panthor ABI mismatch: "
+                    f"{module_abi!r} != {abi!r}"
+                )
+
+            target = pstage / name
+            shutil.copy2(
+                source,
+                target,
+            )
+
+            entries.append({
+                "name": name,
+                "source": source.relative_to(
+                    generation
+                ).as_posix(),
+                "sha256": sha256(target),
+                "bytes": target.stat().st_size,
+                "vermagic": info["vermagic"],
+                "license": info["license"],
+                "depends": info["depends"],
+                "signer": info["signer"],
+                "sig_key": info["sig_key"],
+            })
+
+        (
+            pstage
+            / "manifest.json"
+        ).write_text(
+            json.dumps(
+                {
+                    "schema":
+                        "treeforge.kernel.panthor-provider.v1",
+                    "release": version,
+                    "target": "tangorpro",
+                    "android_base": "android15",
+                    "generation": str(generation),
+                    "kernel_abi": abi,
+                    "module_count": len(entries),
+                    "modules": entries,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+
+        panthor_archive = (
+            assets
+            / f"{pname}.tar.zst"
+        )
+
+        tar_zst(
+            stage,
+            pname,
+            panthor_archive,
+        )
+
+    release_assets = [boot, standalone, module_archive]
+    if panthor_archive:
+        release_assets.append(panthor_archive)
+
+    with (assets / "SHA256SUMS").open("w") as stream:
+        for path in release_assets:
+            stream.write(f"{sha256(path)}  {path.name}\n")
+
+    shutil.rmtree(stage)
+
+    print()
+    print("TreeForge local release package")
+    print("===============================")
+    print(f"Version:             {version}")
+    print(f"Generation:          {generation}")
+    print(f"Kernel ABI:          {abi}")
+    print(f"vendor_dlkm modules: {carriers['vendor_dlkm']['module_count']}")
+    print(f"system_dlkm modules: {carriers['system_dlkm']['module_count']}")
+    print(f"Total modules:       {total}")
+    print(f"Panthor family:      {'4/4' if panthor_archive else 'not present'}")
+    print(f"Assets:              {assets}")
+    print()
+    print("NETWORK ACCESSED:     NO")
+    print("GITHUB ACTION:        NO")
+    print("GIT ACTION:           NO")
+    print("DEVICE MODIFIED:      NO")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except ReleaseError as error:
+        print(f"\nERROR: {error}", file=sys.stderr)
+        raise SystemExit(1)

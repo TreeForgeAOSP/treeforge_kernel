@@ -1,0 +1,57 @@
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/clock/gs201.h>
+
+/ {
+    /*
+     * TreeForge tangorpro runtime GPU personality.
+     *
+     * The persistent/base DT remains Google Android/Kbase compatible.
+     * This overlay is applied only by the ChromiumOS runtime before
+     * Panthor is loaded.
+     */
+
+    fragment@0 {
+        target-path = "/";
+
+        __overlay__ {
+            treeforge_panthor_gpu_opp_table:
+            opp-table-panthor {
+                compatible = "operating-points-v2";
+
+                opp-848000 {
+                    opp-hz = /bits/ 64 <848000>;
+                };
+            };
+        };
+    };
+
+    fragment@1 {
+        target-path = "/mali@28000000";
+
+        __overlay__ {
+            compatible = "arm,mali-valhall-csf";
+
+            interrupt-names = "job", "mmu", "gpu";
+
+            power-domains = <&pd_embedded_g3d>;
+            power-domain-names = "cores";
+
+            clocks = <&clock CLK_G3D_DVFS>,
+                     <&clock CLK_G3DL2_DVFS>;
+
+            clock-names = "core", "coregroup";
+
+            assigned-clocks = <&clock CLK_G3D_DVFS>,
+                              <&clock CLK_G3DL2_DVFS>;
+
+            assigned-clock-rates = <848000>, <996000>;
+
+            operating-points-v2 =
+                <&treeforge_panthor_gpu_opp_table>;
+
+            treeforge,panthor-runtime-overlay;
+        };
+    };
+};

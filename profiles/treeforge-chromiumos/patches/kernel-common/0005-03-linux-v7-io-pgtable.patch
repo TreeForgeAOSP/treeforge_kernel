@@ -1,0 +1,271 @@
+diff --git a/drivers/iommu/io-pgtable-arm.c b/drivers/iommu/io-pgtable-arm.c
+--- a/drivers/iommu/io-pgtable-arm.c
++++ b/drivers/iommu/io-pgtable-arm.c
+@@ -192,20 +192,28 @@
+ }
+ 
+ static void *__arm_lpae_alloc_pages(size_t size, gfp_t gfp,
+-				    struct io_pgtable_cfg *cfg)
++				    struct io_pgtable_cfg *cfg,
++				    void *cookie)
+ {
+ 	struct device *dev = cfg->iommu_dev;
+ 	int order = get_order(size);
+-	struct page *p;
+ 	dma_addr_t dma;
+ 	void *pages;
+ 
+ 	VM_BUG_ON((gfp & __GFP_HIGHMEM));
+-	p = alloc_pages_node(dev_to_node(dev), gfp | __GFP_ZERO, order);
+-	if (!p)
++
++	if (cfg->alloc) {
++		pages = cfg->alloc(cookie, size, gfp);
++	} else {
++		struct page *p;
++
++		p = alloc_pages_node(dev_to_node(dev), gfp | __GFP_ZERO, order);
++		pages = p ? page_address(p) : NULL;
++	}
++
++	if (!pages)
+ 		return NULL;
+ 
+-	pages = page_address(p);
+ 	if (!cfg->coherent_walk) {
+ 		dma = dma_map_single(dev, pages, size, DMA_TO_DEVICE);
+ 		if (dma_mapping_error(dev, dma))
+@@ -224,18 +232,28 @@
+ out_unmap:
+ 	dev_err(dev, "Cannot accommodate DMA translation for IOMMU page tables\n");
+ 	dma_unmap_single(dev, dma, size, DMA_TO_DEVICE);
++
+ out_free:
+-	__free_pages(p, order);
++	if (cfg->free)
++		cfg->free(cookie, pages, size);
++	else
++		free_pages((unsigned long)pages, order);
++
+ 	return NULL;
+ }
+ 
+ static void __arm_lpae_free_pages(void *pages, size_t size,
+-				  struct io_pgtable_cfg *cfg)
++				  struct io_pgtable_cfg *cfg,
++				  void *cookie)
+ {
+ 	if (!cfg->coherent_walk)
+ 		dma_unmap_single(cfg->iommu_dev, __arm_lpae_dma_addr(pages),
+ 				 size, DMA_TO_DEVICE);
+-	free_pages((unsigned long)pages, get_order(size));
++
++	if (cfg->free)
++		cfg->free(cookie, pages, size);
++	else
++		free_pages((unsigned long)pages, get_order(size));
+ }
+ 
+ static void __arm_lpae_sync_pte(arm_lpae_iopte *ptep, int num_entries,
+@@ -377,13 +395,13 @@
+ 	/* Grab a pointer to the next level */
+ 	pte = READ_ONCE(*ptep);
+ 	if (!pte) {
+-		cptep = __arm_lpae_alloc_pages(tblsz, gfp, cfg);
++		cptep = __arm_lpae_alloc_pages(tblsz, gfp, cfg, data->iop.cookie);
+ 		if (!cptep)
+ 			return -ENOMEM;
+ 
+ 		pte = arm_lpae_install_table(cptep, ptep, 0, data);
+ 		if (pte)
+-			__arm_lpae_free_pages(cptep, tblsz, cfg);
++			__arm_lpae_free_pages(cptep, tblsz, cfg, data->iop.cookie);
+ 	} else if (!cfg->coherent_walk && !(pte & ARM_LPAE_PTE_SW_SYNC)) {
+ 		__arm_lpae_sync_pte(ptep, 1, cfg);
+ 	}
+@@ -545,7 +563,7 @@
+ 		__arm_lpae_free_pgtable(data, lvl + 1, iopte_deref(pte, data));
+ 	}
+ 
+-	__arm_lpae_free_pages(start, table_size, &data->iop.cfg);
++	__arm_lpae_free_pages(start, table_size, &data->iop.cfg, data->iop.cookie);
+ }
+ 
+ static void arm_lpae_free_pgtable(struct io_pgtable *iop)
+@@ -573,7 +591,7 @@
+ 	if (WARN_ON(lvl == ARM_LPAE_MAX_LEVELS))
+ 		return 0;
+ 
+-	tablep = __arm_lpae_alloc_pages(tablesz, GFP_ATOMIC, cfg);
++	tablep = __arm_lpae_alloc_pages(tablesz, GFP_ATOMIC, cfg, data->iop.cookie);
+ 	if (!tablep)
+ 		return 0; /* Bytes unmapped */
+ 
+@@ -596,7 +614,7 @@
+ 
+ 	pte = arm_lpae_install_table(tablep, ptep, blk_pte, data);
+ 	if (pte != blk_pte) {
+-		__arm_lpae_free_pages(tablep, tablesz, cfg);
++		__arm_lpae_free_pages(tablep, tablesz, cfg, data->iop.cookie);
+ 		/*
+ 		 * We may race against someone unmapping another part of this
+ 		 * block, but anything else is invalid. We can't misinterpret
+@@ -915,7 +933,7 @@
+ 
+ 	/* Looking good; allocate a pgd */
+ 	data->pgd = __arm_lpae_alloc_pages(ARM_LPAE_PGD_SIZE(data),
+-					   GFP_KERNEL, cfg);
++					   GFP_KERNEL, cfg, cookie);
+ 	if (!data->pgd)
+ 		goto out_free_data;
+ 
+@@ -1017,7 +1035,7 @@
+ 
+ 	/* Allocate pgd pages */
+ 	data->pgd = __arm_lpae_alloc_pages(ARM_LPAE_PGD_SIZE(data),
+-					   GFP_KERNEL, cfg);
++					   GFP_KERNEL, cfg, cookie);
+ 	if (!data->pgd)
+ 		goto out_free_data;
+ 
+@@ -1092,7 +1110,7 @@
+ 		 << ARM_LPAE_MAIR_ATTR_SHIFT(ARM_LPAE_MAIR_ATTR_IDX_DEV));
+ 
+ 	data->pgd = __arm_lpae_alloc_pages(ARM_LPAE_PGD_SIZE(data), GFP_KERNEL,
+-					   cfg);
++					   cfg, cookie);
+ 	if (!data->pgd)
+ 		goto out_free_data;
+ 
+@@ -1113,26 +1131,31 @@
+ }
+ 
+ struct io_pgtable_init_fns io_pgtable_arm_64_lpae_s1_init_fns = {
++	.caps	= IO_PGTABLE_CAP_CUSTOM_ALLOCATOR,
+ 	.alloc	= arm_64_lpae_alloc_pgtable_s1,
+ 	.free	= arm_lpae_free_pgtable,
+ };
+ 
+ struct io_pgtable_init_fns io_pgtable_arm_64_lpae_s2_init_fns = {
++	.caps	= IO_PGTABLE_CAP_CUSTOM_ALLOCATOR,
+ 	.alloc	= arm_64_lpae_alloc_pgtable_s2,
+ 	.free	= arm_lpae_free_pgtable,
+ };
+ 
+ struct io_pgtable_init_fns io_pgtable_arm_32_lpae_s1_init_fns = {
++	.caps	= IO_PGTABLE_CAP_CUSTOM_ALLOCATOR,
+ 	.alloc	= arm_32_lpae_alloc_pgtable_s1,
+ 	.free	= arm_lpae_free_pgtable,
+ };
+ 
+ struct io_pgtable_init_fns io_pgtable_arm_32_lpae_s2_init_fns = {
++	.caps	= IO_PGTABLE_CAP_CUSTOM_ALLOCATOR,
+ 	.alloc	= arm_32_lpae_alloc_pgtable_s2,
+ 	.free	= arm_lpae_free_pgtable,
+ };
+ 
+ struct io_pgtable_init_fns io_pgtable_arm_mali_lpae_init_fns = {
++	.caps	= IO_PGTABLE_CAP_CUSTOM_ALLOCATOR,
+ 	.alloc	= arm_mali_lpae_alloc_pgtable,
+ 	.free	= arm_lpae_free_pgtable,
+ };
+diff --git a/drivers/iommu/io-pgtable.c b/drivers/iommu/io-pgtable.c
+--- a/drivers/iommu/io-pgtable.c
++++ b/drivers/iommu/io-pgtable.c
+@@ -34,6 +34,26 @@
+ #endif
+ };
+ 
++static int check_custom_allocator(enum io_pgtable_fmt fmt,
++				  struct io_pgtable_cfg *cfg)
++{
++	/* No custom allocator, no need to check the format. */
++	if (!cfg->alloc && !cfg->free)
++		return 0;
++
++	/* When passing a custom allocator, both the alloc and free
++	 * functions should be provided.
++	 */
++	if (!cfg->alloc || !cfg->free)
++		return -EINVAL;
++
++	/* Make sure the format supports custom allocators. */
++	if (io_pgtable_init_table[fmt]->caps & IO_PGTABLE_CAP_CUSTOM_ALLOCATOR)
++		return 0;
++
++	return -EINVAL;
++}
++
+ struct io_pgtable_ops *alloc_io_pgtable_ops(enum io_pgtable_fmt fmt,
+ 					    struct io_pgtable_cfg *cfg,
+ 					    void *cookie)
+@@ -42,6 +62,9 @@
+ 	const struct io_pgtable_init_fns *fns;
+ 
+ 	if (fmt >= IO_PGTABLE_NUM_FMTS)
++		return NULL;
++
++	if (check_custom_allocator(fmt, cfg))
+ 		return NULL;
+ 
+ 	fns = io_pgtable_init_table[fmt];
+diff --git a/include/linux/io-pgtable.h b/include/linux/io-pgtable.h
+--- a/include/linux/io-pgtable.h
++++ b/include/linux/io-pgtable.h
+@@ -100,6 +100,30 @@
+ 	const struct iommu_flush_ops	*tlb;
+ 	struct device			*iommu_dev;
+ 
++	/**
++	 * @alloc: Custom page allocator.
++	 *
++	 * Optional hook used to allocate page tables. If this function is NULL,
++	 * @free must be NULL too.
++	 *
++	 * Memory returned should be zeroed and suitable for dma_map_single() and
++	 * virt_to_phys().
++	 *
++	 * Not all formats support custom page allocators. Before considering
++	 * passing a non-NULL value, make sure the chosen page format supports
++	 * this feature.
++	 */
++	void *(*alloc)(void *cookie, size_t size, gfp_t gfp);
++
++	/**
++	 * @free: Custom page de-allocator.
++	 *
++	 * Optional hook used to free page tables allocated with the @alloc
++	 * hook. Must be non-NULL if @alloc is not NULL, must be NULL
++	 * otherwise.
++	 */
++	void (*free)(void *cookie, void *pages, size_t size);
++
+ 	/* Low-level data specific to the table format */
+ 	union {
+ 		struct {
+@@ -244,15 +268,25 @@
+ }
+ 
+ /**
++ * enum io_pgtable_caps - IO page table backend capabilities.
++ */
++enum io_pgtable_caps {
++	/** @IO_PGTABLE_CAP_CUSTOM_ALLOCATOR: Backend accepts custom page table allocators. */
++	IO_PGTABLE_CAP_CUSTOM_ALLOCATOR = BIT(0),
++};
++
++/**
+  * struct io_pgtable_init_fns - Alloc/free a set of page tables for a
+  *                              particular format.
+  *
+  * @alloc: Allocate a set of page tables described by cfg.
+  * @free:  Free the page tables associated with iop.
++ * @caps:  Combination of @io_pgtable_caps flags encoding the backend capabilities.
+  */
+ struct io_pgtable_init_fns {
+ 	struct io_pgtable *(*alloc)(struct io_pgtable_cfg *cfg, void *cookie);
+ 	void (*free)(struct io_pgtable *iop);
++	u32 caps;
+ };
+ 
+ extern struct io_pgtable_init_fns io_pgtable_arm_32_lpae_s1_init_fns;

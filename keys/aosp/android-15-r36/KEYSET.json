@@ -1,0 +1,47 @@
+{
+  "device": "tangorpro",
+  "materialization": {
+    "directory": "materialized",
+    "policy": "reconstruct-from-pinned-google-source",
+    "tracked_in_git": false
+  },
+  "profile": "android-15-r36",
+  "provider": "aosp-test-keys",
+  "schema": 1,
+  "signing_nodes": {
+    "boot": {
+      "algorithm": "SHA256_RSA2048",
+      "key": "boot.pem",
+      "public_key_sha1": "cdbb77177f731920bbe0a0f94f84d9038ae0617d",
+      "sha256": "f1d5765a2bdfb92fb08aee021107c7ac1a7a3f590dafd853771c85375ef0fbd7"
+    },
+    "init_boot": {
+      "algorithm": "SHA256_RSA2048",
+      "key": "init_boot.pem",
+      "public_key_sha1": "cdbb77177f731920bbe0a0f94f84d9038ae0617d",
+      "sha256": "f1d5765a2bdfb92fb08aee021107c7ac1a7a3f590dafd853771c85375ef0fbd7"
+    },
+    "vbmeta": {
+      "algorithm": "SHA256_RSA4096",
+      "key": "vbmeta.pem",
+      "public_key_sha1": "2597c218aae470a130f61162feaae70afd97f011",
+      "sha256": "6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121"
+    },
+    "vbmeta_system": {
+      "algorithm": "SHA256_RSA2048",
+      "key": "vbmeta_system.pem",
+      "public_key_sha1": "cdbb77177f731920bbe0a0f94f84d9038ae0617d",
+      "sha256": "f1d5765a2bdfb92fb08aee021107c7ac1a7a3f590dafd853771c85375ef0fbd7"
+    },
+    "vbmeta_vendor": {
+      "algorithm": "SHA256_RSA2048",
+      "key": "vbmeta_vendor.pem",
+      "public_key_sha1": "cdbb77177f731920bbe0a0f94f84d9038ae0617d",
+      "sha256": "f1d5765a2bdfb92fb08aee021107c7ac1a7a3f590dafd853771c85375ef0fbd7"
+    }
+  },
+  "source": {
+    "rsa2048": "tools/mkbootimg/gki/testdata/testkey_rsa2048.pem",
+    "rsa4096": "tools/mkbootimg/gki/testdata/testkey_rsa4096.pem"
+  }
+}

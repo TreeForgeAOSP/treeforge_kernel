@@ -1,0 +1,102 @@
+{
+  "description": "TreeForge tangorpro canonical Bootstrap kernel with Android compatibility, ChromiumOS userspace primitives, Linux v7.0 Panthor 1.7, and GS201 GPU clock/DVFS support",
+  "device": "tangorpro",
+  "id": "treeforge-bootstrap",
+  "kernel_release": "android-15.0.0_r0.94",
+  "label": "TreeForge Bootstrap",
+  "treeforge_components": {
+    "release": "r0.94-v1.0b1",
+    "linux_base": "6.1.99-android14-11",
+    "panthor": "1.7",
+    "panthor_backport": "linux-v7.0",
+    "drm_backport": "linux-v7.0"
+  },
+  "patches": [
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-bootstrap/patches/kernel-common/0001-treeforge-bootstrap-framebuffer.patch",
+      "repository": "aosp",
+      "sha256": "44cb664566f2f364e84eedb55a51183861bc3a1d4270541f52838642b2ea2093"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-bootstrap/patches/kernel-common/0002-trust-stock-gki-module-certificate.patch",
+      "repository": "aosp",
+      "sha256": "9dae7028b5ec5e103286732b1d6008510aa59d01242dccdeb9e08ea6b7538e18"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-bootstrap/patches/kernel-common/0003-disable-pkvm-for-bootstrap.patch",
+      "repository": "aosp",
+      "sha256": "0b1605429272b1f2b91eaf42faa693f9930d5d086067b2a21e7aa45fc2fdccb8"
+    },
+    {
+      "base_revision": "966a2828ccce06078e59e7374c9c68cbe6089004",
+      "patch": "profiles/treeforge-bootstrap/patches/gs201/0001-enable-treeforge-bootstrap-framebuffer.patch",
+      "repository": "private/devices/google/gs201",
+      "sha256": "1c9cd8b5e12a7621c68b032acbed011f0ef8b44048c4c68f8ffbe89e871a1d4b"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-chromiumos/patches/kernel-common/0004-chromiumos-userspace-primitives.patch",
+      "repository": "aosp",
+      "sha256": "95248df236ddc5c227f0b007b4fa85149243429e1b1e1aa698bdba2fc950cd6a"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-chromiumos/patches/kernel-common/0005-01-linux-v7-workqueue.patch",
+      "repository": "aosp",
+      "sha256": "2ba111dac210b7da1fe59d13eb2d59c9d1b4340416534c15a10bdd99bfdba140"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-chromiumos/patches/kernel-common/0005-02-linux-v7-core-mm-fs.patch",
+      "repository": "aosp",
+      "sha256": "e906dd7c346917b3e2b54dbfd9e5847a7ff5549035fe8ff68b1445eb38431a68"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-chromiumos/patches/kernel-common/0005-03-linux-v7-io-pgtable.patch",
+      "repository": "aosp",
+      "sha256": "7d4861bddddf3049e06e8121e5e25d0e675f02507d936a1178b1111cb719a19a"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-chromiumos/patches/kernel-common/0005-04-linux-v7-drm-core.patch",
+      "repository": "aosp",
+      "sha256": "ccde8ab9d697072c734fdb7c8e7ca92c40af2f343471eddfb568479b342825e8"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-chromiumos/patches/kernel-common/0006-linux-v7-panthor-1.7.patch",
+      "repository": "aosp",
+      "sha256": "e6624c434589e8c7ee4759d0789a2c5cdc627ca15c5c9b0eb33d8565ac87868c"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-chromiumos/patches/kernel-common/0007-01-linux-v7-drm-panthor-kconfig.patch",
+      "repository": "aosp",
+      "sha256": "d7ee2ba038b919312b71a82267b8cdd5749bef9075a33584e0c592c91f227ea4"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-chromiumos/patches/kernel-common/0007-02-linux-v7-drm-panthor-build.patch",
+      "repository": "aosp",
+      "sha256": "b2768ca813fb55eec621263c6427554979550551ce0ce3619a9721f02fa5aa24"
+    },
+    {
+      "base_revision": "5c48566f5564edbe69c2ea7c0b1dda9ce96a8816",
+      "patch": "profiles/treeforge-chromiumos/patches/soc-gs/0001-01-chromiumos-gs201-panthor-v7-dvfs-ccf.patch",
+      "repository": "private/google-modules/soc/gs",
+      "sha256": "d31564dec2626af2ded84116567c84c30a5cd0e563f60ffc750cb5cfbb677c67"
+    },
+    {
+      "base_revision": "5c48566f5564edbe69c2ea7c0b1dda9ce96a8816",
+      "patch": "profiles/treeforge-chromiumos/patches/soc-gs/0001-02-chromiumos-gs201-panthor-v7-clkdev-alias.patch",
+      "repository": "private/google-modules/soc/gs",
+      "sha256": "dad37f05173c06f3905d238b062c6130dc764787231692919998713b40cccc69"
+    }
+  ],
+  "schema": 1,
+  "source_lock": "provenance/google/treeforge-bootstrap/android-15.0.0_r0.94/SOURCE_LOCK.json"
+}

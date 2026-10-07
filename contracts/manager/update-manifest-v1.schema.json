@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://treeforge.dev/contracts/manager/update-manifest-v1.schema.json",
+  "title": "TreeForge Manager Update Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "component",
+    "release",
+    "device",
+    "platform",
+    "kernel_abi",
+    "applicability",
+    "artifacts",
+    "partitions",
+    "reconstruction"
+  ],
+  "properties": {
+    "schema": {
+      "const": "treeforge.manager.update.v1"
+    },
+    "component": {
+      "type": "string"
+    },
+    "release": {
+      "type": "string"
+    },
+    "device": {
+      "type": "string"
+    },
+    "platform": {
+      "type": "string"
+    },
+    "kernel_abi": {
+      "type": "string"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "applicability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requires_treeforge_installed",
+        "install_state_schema",
+        "device",
+        "accepted_kernel_abis"
+      ],
+      "properties": {
+        "requires_treeforge_installed": {
+          "type": "boolean"
+        },
+        "install_state_schema": {
+          "type": "string"
+        },
+        "device": {
+          "type": "string"
+        },
+        "accepted_kernel_abis": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "partitions": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/partitionOperation"
+      }
+    },
+    "reconstruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "carrier_source",
+        "proprietary_payload_distribution",
+        "binary_patch_deltas",
+        "supported_operations"
+      ],
+      "properties": {
+        "carrier_source": {
+          "const": "current-installed"
+        },
+        "proprietary_payload_distribution": {
+          "const": false
+        },
+        "binary_patch_deltas": {
+          "const": false
+        },
+        "supported_operations": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "preserve",
+              "replace_whole",
+              "reconstruct_current"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filename",
+        "sha256",
+        "identity_scope",
+        "bytes",
+        "redistribution",
+        "install_realization"
+      ],
+      "properties": {
+        "filename": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "identity_scope": {
+          "const": "release-download"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "redistribution": {
+          "enum": [
+            "public",
+            "not-distributed"
+          ]
+        },
+        "install_realization": {
+          "enum": [
+            "as-downloaded",
+            "owner-avb-local"
+          ]
+        },
+        "module_name": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        }
+      }
+    },
+    "replacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "artifact"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "module_name": {
+          "type": "string"
+        },
+        "accepted_current_sha256": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "partitionOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation"
+      ],
+      "properties": {
+        "operation": {
+          "enum": [
+            "preserve",
+            "replace_whole",
+            "reconstruct_current"
+          ]
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "source": {
+          "const": "current-installed"
+        },
+        "replacements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/replacement"
+          }
+        },
+        "regenerate_module_metadata": {
+          "type": "boolean"
+        },
+        "signing": {
+          "enum": [
+            "preserve",
+            "owner-avb-local"
+          ]
+        },
+        "avb_parent": {
+          "type": "string"
+        },
+        "avb_parent_action": {
+          "enum": [
+            "preserve-chain",
+            "regenerate"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "replace_whole"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "artifact"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "reconstruct_current"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "source",
+              "replacements"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

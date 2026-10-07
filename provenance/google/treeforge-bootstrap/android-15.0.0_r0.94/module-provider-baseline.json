@@ -1,0 +1,11 @@
+{
+  "android_base": "android15",
+  "device": "tangorpro",
+  "platform_release": "android-15.0.0_r0.94",
+  "schema": 1,
+  "supported_baseline": {
+    "system_dlkm_sha256": "4741a7909a3f0a8e2da8575ff168b73e4a2736c8deadcfa8c89fe59957922ef0",
+    "type": "pixel-partitioner-aosp-backup",
+    "vendor_dlkm_sha256": "b35713610f16dc6fc19649abfcab1ade1c8b2bf4fd026c2f7a49ffb1e45fd1e8"
+  }
+}

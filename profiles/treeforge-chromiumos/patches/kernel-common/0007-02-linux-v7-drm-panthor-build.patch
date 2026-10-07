@@ -1,0 +1,40 @@
+diff --git a/BUILD.bazel b/BUILD.bazel
+index e5621f3e8..a2e82f31c 100644
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -136,7 +136,12 @@ filegroup(
+ define_common_kernels(target_configs = {
+     "kernel_aarch64": {
+         "kmi_symbol_list_strict_mode": True,
+-        "module_implicit_outs": get_gki_modules_list("arm64"),
++        "module_implicit_outs": get_gki_modules_list("arm64") + [
++            "drivers/gpu/drm/drm_exec.ko",
++            "drivers/gpu/drm/drm_gpuvm.ko",
++            "drivers/gpu/drm/panthor/panthor.ko",
++            "drivers/gpu/drm/scheduler/gpu-sched.ko",
++        ],
+         "kmi_symbol_list": "android/abi_gki_aarch64",
+         "rewrite_absolute_paths_in_config": True,
+         "kmi_symbol_list_add_only": True,
+diff --git a/drivers/gpu/drm/Makefile b/drivers/gpu/drm/Makefile
+index 0b283e46f..43b1ba288 100644
+--- a/drivers/gpu/drm/Makefile
++++ b/drivers/gpu/drm/Makefile
+@@ -40,6 +40,9 @@ obj-$(CONFIG_DRM_PANEL_ORIENTATION_QUIRKS) += drm_panel_orientation_quirks.o
+ # Memory-management helpers
+ #
+ 
++obj-$(CONFIG_DRM_EXEC) += drm_exec.o
++obj-$(CONFIG_DRM_GPUVM) += drm_gpuvm.o
++
+ obj-$(CONFIG_DRM_BUDDY) += drm_buddy.o
+ 
+ drm_dma_helper-y := drm_gem_dma_helper.o
+@@ -140,6 +143,7 @@ obj-$(CONFIG_DRM_XEN) += xen/
+ obj-$(CONFIG_DRM_VBOXVIDEO) += vboxvideo/
+ obj-$(CONFIG_DRM_LIMA)  += lima/
+ obj-$(CONFIG_DRM_PANFROST) += panfrost/
++obj-$(CONFIG_DRM_PANTHOR) += panthor/
+ obj-$(CONFIG_DRM_ASPEED_GFX) += aspeed/
+ obj-$(CONFIG_DRM_MCDE) += mcde/
+ obj-$(CONFIG_DRM_TIDSS) += tidss/

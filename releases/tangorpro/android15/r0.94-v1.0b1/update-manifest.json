@@ -1,0 +1,70 @@
+{
+  "schema": "treeforge.manager.update.v1",
+  "component": "kernel",
+  "release": "r0.94-v1.0b1",
+  "device": "tangorpro",
+  "platform": "android15",
+  "kernel_abi": "6.1.99-android14-11-g3c76c2d71bb3-ab13202328",
+  "profile": "treeforge-bootstrap",
+  "applicability": {
+    "requires_treeforge_installed": true,
+    "install_state_schema": "treeforge.manager.install-state.v1",
+    "device": "tangorpro",
+    "accepted_kernel_abis": [
+      "6.1.99-android14-11-g3c76c2d71bb3-ab13202328"
+    ]
+  },
+  "artifacts": {
+    "boot": {
+      "filename": "boot.img",
+      "sha256": "50c3adaeaed415a4e5dd4389ec44319bec30750ee2defb6dd16f48e5d8b7ae98",
+      "identity_scope": "release-download",
+      "bytes": 67108864,
+      "redistribution": "public",
+      "install_realization": "owner-avb-local"
+    }
+  },
+  "partitions": {
+    "boot": {
+      "operation": "replace_whole",
+      "artifact": "boot",
+      "signing": "owner-avb-local",
+      "avb_parent": "vbmeta",
+      "avb_parent_action": "preserve-chain"
+    },
+    "init_boot": {
+      "operation": "preserve"
+    },
+    "vendor_boot": {
+      "operation": "preserve"
+    },
+    "vendor_kernel_boot": {
+      "operation": "preserve"
+    },
+    "vendor_dlkm": {
+      "operation": "preserve"
+    },
+    "system_dlkm": {
+      "operation": "preserve"
+    },
+    "vbmeta": {
+      "operation": "preserve"
+    },
+    "vbmeta_system": {
+      "operation": "preserve"
+    },
+    "vbmeta_vendor": {
+      "operation": "preserve"
+    }
+  },
+  "reconstruction": {
+    "carrier_source": "current-installed",
+    "proprietary_payload_distribution": false,
+    "binary_patch_deltas": false,
+    "supported_operations": [
+      "preserve",
+      "replace_whole",
+      "reconstruct_current"
+    ]
+  }
+}

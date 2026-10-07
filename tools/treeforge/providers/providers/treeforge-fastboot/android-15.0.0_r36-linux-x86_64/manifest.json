@@ -1,0 +1,107 @@
+{
+  "architecture": "x86_64",
+  "executables": [
+    {
+      "capabilities": [
+        "treeforge-fastboot-host"
+      ],
+      "name": "fastboot",
+      "path": "bin/fastboot",
+      "sha256": "340c23293ee6f3fb60d689e8c2042d23ef969d511981c2df3c423973d6ff4898"
+    }
+  ],
+  "legal_files": [
+    {
+      "path": "legal/LEGAL-SOURCES.json",
+      "sha256": "34d4594fc61d017ca0246464881b5449bb3394e22e3788c9ebe2e0917bdf7116"
+    },
+    {
+      "path": "legal/upstream/system/core/MODULE_LICENSE_APACHE2",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "legal/upstream/system/core/debuggerd/MODULE_LICENSE_APACHE2",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "legal/upstream/system/core/fastboot/LICENSE",
+      "sha256": "1bc6c8aff995afb8905dce226367c3e564eb68e4969bfe491229b8b50f19ebe1"
+    },
+    {
+      "path": "legal/upstream/system/core/fs_mgr/NOTICE",
+      "sha256": "79f4e3e40e233ecf37271aec00da77235f6528054d057208460a33f44848b23a"
+    },
+    {
+      "path": "legal/upstream/system/core/init/MODULE_LICENSE_APACHE2",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "legal/upstream/system/core/init/NOTICE",
+      "sha256": "38751245389e1e23f73e6f5384b5cbe7fa972cc4410c5adc9c04b082a0b9561a"
+    },
+    {
+      "path": "legal/upstream/system/core/libcutils/MODULE_LICENSE_APACHE2",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "legal/upstream/system/core/libcutils/NOTICE",
+      "sha256": "38751245389e1e23f73e6f5384b5cbe7fa972cc4410c5adc9c04b082a0b9561a"
+    },
+    {
+      "path": "legal/upstream/system/core/libgrallocusage/MODULE_LICENSE_APACHE2",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "legal/upstream/system/core/libgrallocusage/NOTICE",
+      "sha256": "38751245389e1e23f73e6f5384b5cbe7fa972cc4410c5adc9c04b082a0b9561a"
+    },
+    {
+      "path": "legal/upstream/system/core/libkeyutils/NOTICE",
+      "sha256": "511ce23b36ca7dd3858570d8ee3054ceed18e12d284f96661d030a82590a5954"
+    },
+    {
+      "path": "legal/upstream/system/core/libnetutils/NOTICE",
+      "sha256": "38751245389e1e23f73e6f5384b5cbe7fa972cc4410c5adc9c04b082a0b9561a"
+    },
+    {
+      "path": "legal/upstream/system/core/libsync/NOTICE",
+      "sha256": "efcb3b0d1a6686c84546d85d1ad53ae01b0535443972c1f33eb248ae24b8357d"
+    },
+    {
+      "path": "legal/upstream/system/core/libutils/MODULE_LICENSE_APACHE2",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "legal/upstream/system/core/libutils/NOTICE",
+      "sha256": "38751245389e1e23f73e6f5384b5cbe7fa972cc4410c5adc9c04b082a0b9561a"
+    },
+    {
+      "path": "legal/upstream/system/core/run-as/NOTICE",
+      "sha256": "38751245389e1e23f73e6f5384b5cbe7fa972cc4410c5adc9c04b082a0b9561a"
+    },
+    {
+      "path": "legal/upstream/system/core/toolbox/MODULE_LICENSE_APACHE2",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "legal/upstream/system/core/toolbox/NOTICE",
+      "sha256": "18506019bb1f7624acda78bb7122784c74dc3551d137df51e485818dd06c4c55"
+    }
+  ],
+  "name": "treeforge-fastboot",
+  "platform": "linux",
+  "provenance_files": [],
+  "provider_sources": [
+    {
+      "module": "fastboot",
+      "platform": "android",
+      "platform_release": "android-15.0.0_r36",
+      "project": "platform/system/core",
+      "revision": "00c7fec1bb09f3284aad6a6f96d2f63dfc3650ad",
+      "source_path": "system/core/fastboot"
+    }
+  ],
+  "release": "android-15.0.0_r36-linux-x86_64",
+  "runtime_files": [],
+  "schema": 2
+}

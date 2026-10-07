@@ -1,0 +1,84 @@
+diff --git a/drivers/clk/gs/composite.c b/drivers/clk/gs/composite.c
+index 2b6d6d133bd6185a8ba03e51b009f771ea95efec..5682c501694916ea7c979d58ba575e7ba220495d 100644
+--- a/drivers/clk/gs/composite.c
++++ b/drivers/clk/gs/composite.c
+@@ -11,6 +11,8 @@
+ #include <linux/of.h>
+ #include <linux/module.h>
+ #include <linux/delay.h>
++#include <linux/clkdev.h>
++#include <linux/string.h>
+ #include <soc/google/cal-if.h>
+ #include <trace/events/power.h>
+ 
+@@ -1640,6 +1642,62 @@ static struct clk *_samsung_register_vclk(struct init_vclk *list)
+ 	return clk;
+ }
+ 
++
++/*
++ * TREEFORGE_GS201_GPU_CLKDEV
++ *
++ * The shared Android GPU DT intentionally stays arm,malit6xx
++ * and has no generic CCF "clocks" property.
++ *
++ * The ChromiumOS profile already exposes the two CAL-backed
++ * GS201 GPU DVFS clocks through CCF. Publish lookup aliases for
++ * the existing platform device so Panthor can consume them with:
++ *
++ *   devm_clk_get(dev, NULL)         -> G3D
++ *   devm_clk_get(dev, "coregroup")  -> G3DL2
++ *
++ * Linux 7.0 Panthor also probes the optional "stacks" clock.
++ * GS201 has no separate stacks DVFS domain in this bridge, so
++ * that optional lookup is intentionally left unresolved.
++ *
++ * No device-tree mutation and no direct Panthor -> CAL coupling.
++ */
++static void
++treeforge_gs201_gpu_clkdev_alias(struct clk *clk, const char *name)
++{
++	const char *con_id;
++	int ret;
++
++	if (IS_ERR_OR_NULL(clk) || !name)
++		return;
++
++	if (!strcmp(name, "CLK_G3D_DVFS"))
++		con_id = NULL;
++	else if (!strcmp(name, "CLK_G3DL2_DVFS"))
++		con_id = "coregroup";
++	else
++		return;
++
++	ret = clk_register_clkdev(
++		clk,
++		con_id,
++		"28000000.mali");
++
++	if (ret) {
++		pr_warn(
++			"TreeForge: GS201 GPU clkdev alias %s failed: %d\n",
++			name,
++			ret);
++		return;
++	}
++
++	pr_info(
++		"TREEFORGE_GS201_GPU_CLKDEV "
++		"%s dev=28000000.mali con=%s\n",
++		name,
++		con_id ? con_id : "<default>");
++}
++
+ void samsung_register_vclk(struct samsung_clk_provider *ctx,
+ 			struct init_vclk *list, unsigned int nr_vclk)
+ {
+@@ -1649,6 +1707,7 @@ void samsung_register_vclk(struct samsung_clk_provider *ctx,
+ 
+ 	for (cnt = 0; cnt < nr_vclk; cnt++) {
+ 		clk = _samsung_register_vclk(&list[cnt]);
++		treeforge_gs201_gpu_clkdev_alias(clk, list[cnt].name);
+ 		if (IS_ERR(clk)) {
+ 			pr_err("Failed to register virtual clock %s\n",
+ 			       (&list[cnt])->name);

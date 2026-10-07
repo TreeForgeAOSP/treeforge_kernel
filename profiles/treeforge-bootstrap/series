@@ -1,0 +1,14 @@
+aosp patches/kernel-common/0001-treeforge-bootstrap-framebuffer.patch
+aosp patches/kernel-common/0002-trust-stock-gki-module-certificate.patch
+aosp patches/kernel-common/0003-disable-pkvm-for-bootstrap.patch
+private/devices/google/gs201 patches/gs201/0001-enable-treeforge-bootstrap-framebuffer.patch
+aosp ../treeforge-chromiumos/patches/kernel-common/0004-chromiumos-userspace-primitives.patch
+aosp ../treeforge-chromiumos/patches/kernel-common/0005-01-linux-v7-workqueue.patch
+aosp ../treeforge-chromiumos/patches/kernel-common/0005-02-linux-v7-core-mm-fs.patch
+aosp ../treeforge-chromiumos/patches/kernel-common/0005-03-linux-v7-io-pgtable.patch
+aosp ../treeforge-chromiumos/patches/kernel-common/0005-04-linux-v7-drm-core.patch
+aosp ../treeforge-chromiumos/patches/kernel-common/0006-linux-v7-panthor-1.7.patch
+aosp ../treeforge-chromiumos/patches/kernel-common/0007-01-linux-v7-drm-panthor-kconfig.patch
+aosp ../treeforge-chromiumos/patches/kernel-common/0007-02-linux-v7-drm-panthor-build.patch
+private/google-modules/soc/gs ../treeforge-chromiumos/patches/soc-gs/0001-01-chromiumos-gs201-panthor-v7-dvfs-ccf.patch
+private/google-modules/soc/gs ../treeforge-chromiumos/patches/soc-gs/0001-02-chromiumos-gs201-panthor-v7-clkdev-alias.patch

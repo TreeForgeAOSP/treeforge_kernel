@@ -1,0 +1,37 @@
+diff --git a/drivers/gpu/drm/Kconfig b/drivers/gpu/drm/Kconfig
+index f30f99166..29d606b77 100644
+--- a/drivers/gpu/drm/Kconfig
++++ b/drivers/gpu/drm/Kconfig
+@@ -195,6 +195,20 @@ config DRM_TTM
+ 	  GPU memory types. Will be enabled automatically if a device driver
+ 	  uses it.
+ 
++config DRM_EXEC
++	tristate
++	depends on DRM
++	help
++	  Execution context for command submissions
++
++config DRM_GPUVM
++	tristate
++	depends on DRM
++	select DRM_EXEC
++	help
++	  GPU-VM representation providing helpers to manage a GPUs virtual
++	  address space
++
+ config DRM_BUDDY
+ 	tristate
+ 	depends on DRM
+@@ -402,6 +416,11 @@ source "drivers/gpu/drm/vboxvideo/Kconfig"
+ source "drivers/gpu/drm/lima/Kconfig"
+ 
+ source "drivers/gpu/drm/panfrost/Kconfig"
++source "drivers/gpu/drm/panthor/Kconfig"
++
++config DRM_PANTHOR
++	tristate
++	default m
+ 
+ source "drivers/gpu/drm/aspeed/Kconfig"
+ 

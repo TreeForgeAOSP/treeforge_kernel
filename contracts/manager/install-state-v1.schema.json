@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://treeforge.dev/contracts/manager/install-state-v1.schema.json",
+  "title": "TreeForge Installed State v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "device",
+    "platform",
+    "components",
+    "partitions"
+  ],
+  "properties": {
+    "schema": {
+      "const": "treeforge.manager.install-state.v1"
+    },
+    "device": {
+      "type": "string"
+    },
+    "platform": {
+      "type": "string"
+    },
+    "kernel_abi": {
+      "type": "string"
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner_root_public_fingerprint": {
+          "type": "string"
+        },
+        "owner_child_public_fingerprint": {
+          "type": "string"
+        }
+      }
+    },
+    "partitions": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/partitionState"
+      }
+    }
+  },
+  "$defs": {
+    "partitionState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256"
+      ],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "realized_by": {
+          "enum": [
+            "pixel-partitioner",
+            "treeforge-manager",
+            "treeforge-bootstrap"
+          ]
+        }
+      }
+    }
+  }
+}

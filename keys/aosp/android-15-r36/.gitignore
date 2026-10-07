@@ -1,0 +1,3 @@
+# AOSP development PEMs are reconstructed locally.
+materialized/
+*.pem
