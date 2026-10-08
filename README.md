@@ -80,7 +80,7 @@ publishes releases, uploads assets, or otherwise performs a GitHub action.
 Example:
 
     ./kernelctl release \
-        --version r0.94-v1.0b1 \
+        --version r0.94-v1.0b2 \
         --generation out/source/20261006-164804-0400
 
 The module provider is always generated as one coherent family from the

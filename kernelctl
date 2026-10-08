@@ -4512,7 +4512,7 @@ def release_command(argv) -> int:
     parser.add_argument(
         "--version",
         required=True,
-        help="release identity, for example r0.94-v1.0b1",
+        help="release identity, for example r0.94-v1.0b2",
     )
 
     parser.add_argument(

@@ -5,7 +5,7 @@
   "kernel_release": "android-15.0.0_r0.94",
   "label": "TreeForge Bootstrap",
   "treeforge_components": {
-    "release": "r0.94-v1.0b1",
+    "release": "r0.94-v1.0b2",
     "linux_base": "6.1.99-android14-11",
     "panthor": "1.7",
     "panthor_backport": "linux-v7.0",

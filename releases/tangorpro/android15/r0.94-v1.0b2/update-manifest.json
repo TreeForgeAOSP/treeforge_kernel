@@ -1,0 +1,114 @@
+{
+  "schema": "treeforge.manager.update.v1",
+  "component": "kernel",
+  "release": "r0.94-v1.0b2",
+  "device": "tangorpro",
+  "platform": "android15",
+  "kernel_abi": "6.1.99-android14-11-g3c76c2d71bb3-ab13202328",
+  "profile": "treeforge-bootstrap",
+  "applicability": {
+    "requires_treeforge_installed": true,
+    "install_state_schema": "treeforge.manager.install-state.v1",
+    "device": "tangorpro",
+    "accepted_kernel_abis": [
+      "6.1.99-android14-11-g3c76c2d71bb3-ab13202328"
+    ]
+  },
+  "artifacts": {
+    "boot": {
+      "filename": "boot.img",
+      "sha256": "51f863c0b872ca0f10a8f2d92e82b3f465447fff48920fd1fd0e802dd499f27b",
+      "identity_scope": "release-download",
+      "bytes": 67108864,
+      "redistribution": "public",
+      "install_realization": "owner-avb-local"
+    },
+    "module_provider": {
+      "filename": "module-provider.json",
+      "sha256": "6c600187087fbeb3a41123f9dc5ca596dbe9109f2f81706749b5aa447ccbb821",
+      "identity_scope": "release-download",
+      "bytes": 473737,
+      "redistribution": "public",
+      "install_realization": "reconstruction-provider"
+    },
+    "module_archive": {
+      "filename": "treeforge-kernel-modules-tangorpro-android15-r0.94-v1.0b2.tar.zst",
+      "sha256": "1c8aa8caec6b48c5b63831f179e11fab4b482cf920c489954397d33df2faf3b3",
+      "identity_scope": "release-download",
+      "bytes": 16891974,
+      "redistribution": "public",
+      "install_realization": "reconstruction-provider"
+    }
+  },
+  "partitions": {
+    "boot": {
+      "operation": "replace_whole",
+      "artifact": "boot",
+      "signing": "owner-avb-local",
+      "avb_parent": "vbmeta",
+      "avb_parent_action": "preserve-chain"
+    },
+    "init_boot": {
+      "operation": "preserve"
+    },
+    "vendor_boot": {
+      "operation": "preserve"
+    },
+    "vendor_kernel_boot": {
+      "operation": "reconstruct_current",
+      "provider_carrier": "vendor_kernel_boot",
+      "avb_parent": "vbmeta",
+      "avb_parent_action": "rebuild-descriptor",
+      "authentication": "descriptor-authenticated"
+    },
+    "vendor_dlkm": {
+      "operation": "reconstruct_current",
+      "provider_carrier": "vendor_dlkm",
+      "avb_parent": "vbmeta",
+      "avb_parent_action": "rebuild-descriptor",
+      "authentication": "descriptor-authenticated"
+    },
+    "system_dlkm": {
+      "operation": "reconstruct_current",
+      "provider_carrier": "system_dlkm",
+      "avb_parent": "vbmeta_system",
+      "avb_parent_action": "rebuild-descriptor",
+      "authentication": "descriptor-authenticated"
+    },
+    "vbmeta": {
+      "operation": "reconstruct_current",
+      "signing": "owner-avb-local",
+      "avb_role": "root",
+      "rebuild_from_children": [
+        "vendor_kernel_boot",
+        "vendor_dlkm"
+      ]
+    },
+    "vbmeta_system": {
+      "operation": "reconstruct_current",
+      "signing": "owner-avb-local",
+      "avb_parent": "vbmeta",
+      "avb_parent_action": "preserve-chain",
+      "rebuild_from_children": [
+        "system_dlkm"
+      ]
+    },
+    "vbmeta_vendor": {
+      "operation": "preserve"
+    }
+  },
+  "reconstruction": {
+    "carrier_source": "current-installed",
+    "provider_manifest_artifact": "module_provider",
+    "provider_archive_artifact": "module_archive",
+    "proprietary_payload_distribution": false,
+    "partition_images_distributed": false,
+    "binary_patch_deltas": false,
+    "owner_avb": "local-device-owner-resign",
+    "supported_operations": [
+      "preserve",
+      "replace_whole",
+      "reconstruct_current"
+    ]
+  }
+}
