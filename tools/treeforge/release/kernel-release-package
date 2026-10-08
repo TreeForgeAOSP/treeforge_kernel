@@ -65,6 +65,7 @@ def latest_generation(root: Path) -> Path:
         p for p in base.iterdir()
         if p.is_dir()
         and (p / "package" / "boot.img").is_file()
+        and (p / "package" / "vendor_kernel_boot.img").is_file()
         and (p / "package" / "vendor_dlkm.img").is_file()
         and (p / "package" / "system_dlkm.img").is_file()
     ] if base.is_dir() else []
@@ -119,6 +120,86 @@ def modules_root(extract: Path) -> Path:
     return candidates[0]
 
 
+def treeforge_tool(root: Path, name: str) -> Path:
+    contract = (
+        root / ".providers" / ".state" / "treeforge-tools.json"
+    )
+    data = json.loads(
+        need(contract).read_text(encoding="utf-8")
+    )
+    record = data.get("tools", {}).get(name)
+
+    if not isinstance(record, dict) or not record.get("path"):
+        raise ReleaseError(
+            f"TreeForge host tool missing from contract: {name}"
+        )
+
+    return need(Path(record["path"]))
+
+
+def dump_vendor_kernel_boot_modules(
+    root: Path,
+    image: Path,
+    target: Path,
+) -> None:
+    if target.exists():
+        shutil.rmtree(target)
+
+    target.mkdir(parents=True)
+
+    unpack = target.parent / ".vendor-kernel-boot-unpack"
+
+    if unpack.exists():
+        shutil.rmtree(unpack)
+
+    unpack.mkdir(parents=True)
+
+    try:
+        run([
+            treeforge_tool(root, "unpack_bootimg"),
+            "--boot_img", image,
+            "--out", unpack,
+            "--format=mkbootimg",
+        ], capture=True)
+
+        ramdisk = need(unpack / "vendor_ramdisk00")
+
+        decompressor = subprocess.Popen(
+            [
+                command("lz4"),
+                "-d",
+                "-c",
+                str(ramdisk),
+            ],
+            stdout=subprocess.PIPE,
+        )
+
+        result = subprocess.run(
+            [
+                command("cpio"),
+                "-idmu",
+            ],
+            cwd=target,
+            stdin=decompressor.stdout,
+            check=False,
+        )
+
+        if decompressor.stdout is not None:
+            decompressor.stdout.close()
+
+        lz4_status = decompressor.wait()
+
+        if lz4_status != 0 or result.returncode != 0:
+            raise ReleaseError(
+                "failed to extract vendor_kernel_boot ramdisk: "
+                f"lz4={lz4_status} cpio={result.returncode}"
+            )
+
+    finally:
+        if unpack.exists():
+            shutil.rmtree(unpack)
+
+
 def modinfo(path: Path) -> dict[str, str]:
     text = run([command("modinfo"), path], capture=True).stdout
     values = {}
@@ -170,7 +251,12 @@ def main() -> int:
     )
     package = generation / "package"
 
-    for name in ("boot.img", "vendor_dlkm.img", "system_dlkm.img"):
+    for name in (
+        "boot.img",
+        "vendor_kernel_boot.img",
+        "vendor_dlkm.img",
+        "system_dlkm.img",
+    ):
         need(package / name)
 
     build_json = generation / "metadata" / "build.json"
@@ -220,11 +306,24 @@ def main() -> int:
     locations: dict[str, list[Path]] = {}
     total = 0
 
-    for carrier in ("vendor_dlkm", "system_dlkm"):
+    for carrier in (
+        "vendor_kernel_boot",
+        "vendor_dlkm",
+        "system_dlkm",
+    ):
         image = package / f"{carrier}.img"
         fs = extract / carrier
         print(f"Extracting {carrier}: {image}")
-        dump_fs(image, fs)
+
+        if carrier == "vendor_kernel_boot":
+            dump_vendor_kernel_boot_modules(
+                root,
+                image,
+                fs,
+            )
+        else:
+            dump_fs(image, fs)
+
         src_modules = modules_root(fs)
         dst_modules = provider / "payload" / carrier / "lib" / "modules"
         shutil.copytree(
@@ -302,6 +401,13 @@ def main() -> int:
             "regenerate_module_metadata": True,
             "partition_images_distributed": False,
             "owner_avb": "local-device-owner-resign",
+            "vendor_kernel_boot": {
+                "source": "current-installed",
+                "image_structure": "preserve",
+                "module_tree_policy": "replace_exact",
+                "ramdisk_compression": "lz4",
+                "rebuild": True,
+            },
         },
         "carriers": carriers,
     }
@@ -311,7 +417,11 @@ def main() -> int:
     )
 
     with (provider / "MODULE_SHA256SUMS").open("w") as stream:
-        for carrier in ("vendor_dlkm", "system_dlkm"):
+        for carrier in (
+            "vendor_kernel_boot",
+            "vendor_dlkm",
+            "system_dlkm",
+        ):
             for rec in carriers[carrier]["modules"]:
                 stream.write(f"{rec['sha256']}  {rec['path']}\n")
 
@@ -321,7 +431,7 @@ def main() -> int:
         "Target: Pixel Tablet (tangorpro)\n"
         f"Kernel ABI: {abi}\n\n"
         "This is a provider, not a flashable partition image. "
-        "Consumers reconstruct DLKM images locally and owner-sign them.\n"
+        "Consumers reconstruct the kernel family locally and owner-sign it.\n"
     )
 
     standalone = assets / "module-provider.json"
@@ -469,6 +579,10 @@ def main() -> int:
     print(f"Version:             {version}")
     print(f"Generation:          {generation}")
     print(f"Kernel ABI:          {abi}")
+    print(
+        "vendor_kernel_boot modules: "
+        f"{carriers['vendor_kernel_boot']['module_count']}"
+    )
     print(f"vendor_dlkm modules: {carriers['vendor_dlkm']['module_count']}")
     print(f"system_dlkm modules: {carriers['system_dlkm']['module_count']}")
     print(f"Total modules:       {total}")

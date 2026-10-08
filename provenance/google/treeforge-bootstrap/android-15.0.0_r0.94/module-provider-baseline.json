@@ -4,8 +4,9 @@
   "platform_release": "android-15.0.0_r0.94",
   "schema": 1,
   "supported_baseline": {
-    "system_dlkm_sha256": "4741a7909a3f0a8e2da8575ff168b73e4a2736c8deadcfa8c89fe59957922ef0",
+    "system_dlkm_sha256": "1daf1af2a01e5cd6d12e84c2b41c08c45ef949fd0977f0defd835081594cec7e",
     "type": "pixel-partitioner-aosp-backup",
-    "vendor_dlkm_sha256": "b35713610f16dc6fc19649abfcab1ade1c8b2bf4fd026c2f7a49ffb1e45fd1e8"
+    "vendor_dlkm_sha256": "b35713610f16dc6fc19649abfcab1ade1c8b2bf4fd026c2f7a49ffb1e45fd1e8",
+    "vendor_kernel_boot_sha256": "810fab21f77ed66295799cd04208958bfbee11180433b499726c282df9e382fc"
   }
 }
