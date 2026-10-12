@@ -14,9 +14,10 @@
   "patches": [
     {
       "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
-      "patch": "profiles/treeforge-bootstrap/patches/kernel-common/0001-treeforge-bootstrap-framebuffer.patch",
+      "patch": "kernel/kernel-common/0001-treeforge-bootstrap-framebuffer.patch",
       "repository": "aosp",
-      "sha256": "44cb664566f2f364e84eedb55a51183861bc3a1d4270541f52838642b2ea2093"
+      "sha256": "44cb664566f2f364e84eedb55a51183861bc3a1d4270541f52838642b2ea2093",
+      "provider": "treeforge_bootstrap_framebuffer"
     },
     {
       "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
@@ -32,9 +33,10 @@
     },
     {
       "base_revision": "966a2828ccce06078e59e7374c9c68cbe6089004",
-      "patch": "profiles/treeforge-bootstrap/patches/gs201/0001-enable-treeforge-bootstrap-framebuffer.patch",
+      "patch": "kernel/gs201/0001-enable-treeforge-bootstrap-framebuffer.patch",
       "repository": "private/devices/google/gs201",
-      "sha256": "1c9cd8b5e12a7621c68b032acbed011f0ef8b44048c4c68f8ffbe89e871a1d4b"
+      "sha256": "1c9cd8b5e12a7621c68b032acbed011f0ef8b44048c4c68f8ffbe89e871a1d4b",
+      "provider": "treeforge_bootstrap_framebuffer"
     },
     {
       "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
