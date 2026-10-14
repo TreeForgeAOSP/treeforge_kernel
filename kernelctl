@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import struct
 import sys
 import tarfile
 import tempfile
@@ -4007,11 +4008,1829 @@ def latest_source_generation() -> tuple[Path, Path]:
     return generation, generation / "raw"
 
 
+
+# ---------------------------------------------------------------------------
+# TREEFORGE_STAGE0_PROOF_V1
+#
+# Experimental packaging-only Stage-0 feasibility transform.
+#
+# This never alters kernel source or raw build output. It operates only on
+# the package copy of boot.img after its old AVB footer has been removed.
+# ---------------------------------------------------------------------------
+
+
+def _stage0_align_up(
+    value: int,
+    alignment: int,
+) -> int:
+    return (
+        value + alignment - 1
+    ) & ~(alignment - 1)
+
+
+def _stage0_decode_branch(
+    instruction: int,
+    pc: int,
+) -> int:
+    if (
+        instruction & 0x7C000000
+    ) != 0x14000000:
+        raise KernelCtlError(
+            "Stage-0 source Image code1 is not an "
+            f"AArch64 B instruction: 0x{instruction:08x}"
+        )
+
+    immediate = (
+        instruction & 0x03FFFFFF
+    )
+
+    if immediate & (1 << 25):
+        immediate -= 1 << 26
+
+    return pc + (immediate << 2)
+
+
+def _stage0_encode_branch(
+    pc: int,
+    target: int,
+) -> int:
+    delta = target - pc
+
+    if delta % 4:
+        raise KernelCtlError(
+            "Stage-0 branch target is not 4-byte aligned"
+        )
+
+    if (
+        delta < -(1 << 27)
+        or delta >= (1 << 27)
+    ):
+        raise KernelCtlError(
+            "Stage-0 branch target exceeds AArch64 B range"
+        )
+
+    return (
+        0x14000000
+        | (
+            (delta >> 2)
+            & 0x03FFFFFF
+        )
+    )
+
+
+def _stage0_movz_x(
+    register: int,
+    immediate: int,
+    shift: int,
+) -> int:
+    if shift not in (0, 16):
+        raise KernelCtlError(
+            "unsupported Stage-0 MOVZ shift"
+        )
+
+    return (
+        0xD2800000
+        | ((shift // 16) << 21)
+        | ((immediate & 0xFFFF) << 5)
+        | (register & 31)
+    )
+
+
+def _stage0_movk_x(
+    register: int,
+    immediate: int,
+    shift: int,
+) -> int:
+    if shift not in (0, 16):
+        raise KernelCtlError(
+            "unsupported Stage-0 MOVK shift"
+        )
+
+    return (
+        0xF2800000
+        | ((shift // 16) << 21)
+        | ((immediate & 0xFFFF) << 5)
+        | (register & 31)
+    )
+
+
+def _stage0_transform_arm64_image(
+    source: bytes,
+) -> tuple[bytes, dict]:
+    if len(source) < 0x10000:
+        raise KernelCtlError(
+            "Stage-0 source Image is unexpectedly small"
+        )
+
+    def u16(offset: int) -> int:
+        return struct.unpack_from(
+            "<H",
+            source,
+            offset,
+        )[0]
+
+    def u32(offset: int) -> int:
+        return struct.unpack_from(
+            "<I",
+            source,
+            offset,
+        )[0]
+
+    if u32(0x38) != 0x644D5241:
+        raise KernelCtlError(
+            "Stage-0 source Image ARM64 magic mismatch"
+        )
+
+    source_code0 = u32(0x00)
+    source_code1 = u32(0x04)
+
+    primary_rva = _stage0_decode_branch(
+        source_code1,
+        0x04,
+    )
+
+    pe_offset = u32(0x3C)
+
+    if (
+        pe_offset + 24 > len(source)
+        or source[
+            pe_offset:
+            pe_offset + 4
+        ] != b"PE\x00\x00"
+    ):
+        raise KernelCtlError(
+            "Stage-0 source Image PE signature mismatch"
+        )
+
+    coff = pe_offset + 4
+
+    if u16(coff + 0) != 0xAA64:
+        raise KernelCtlError(
+            "Stage-0 source PE machine is not ARM64"
+        )
+
+    section_count = u16(coff + 2)
+    optional_size = u16(coff + 16)
+    optional = coff + 20
+
+    if u16(optional + 0) != 0x020B:
+        raise KernelCtlError(
+            "Stage-0 source PE is not PE32+"
+        )
+
+    section_table = (
+        optional + optional_size
+    )
+
+    data_section = None
+
+    for index in range(section_count):
+        offset = (
+            section_table
+            + index * 40
+        )
+
+        if offset + 40 > len(source):
+            raise KernelCtlError(
+                "Stage-0 PE section table exceeds Image"
+            )
+
+        name = (
+            source[
+                offset:
+                offset + 8
+            ]
+            .split(b"\x00", 1)[0]
+        )
+
+        if name == b".data":
+            data_section = {
+                "index": index,
+                "offset": offset,
+                "virtual_size": u32(
+                    offset + 8
+                ),
+                "virtual_address": u32(
+                    offset + 12
+                ),
+                "raw_size": u32(
+                    offset + 16
+                ),
+                "raw_offset": u32(
+                    offset + 20
+                ),
+                "flags": u32(
+                    offset + 36
+                ),
+            }
+
+            break
+
+    if data_section is None:
+        raise KernelCtlError(
+            "Stage-0 source Image has no .data section"
+        )
+
+    data_va = data_section[
+        "virtual_address"
+    ]
+
+    data_vsize = data_section[
+        "virtual_size"
+    ]
+
+    data_raw = data_section[
+        "raw_offset"
+    ]
+
+    data_raw_size = data_section[
+        "raw_size"
+    ]
+
+    data_end = (
+        data_raw
+        + data_raw_size
+    )
+
+    virtual_end = (
+        data_va
+        + data_vsize
+    )
+
+    if data_raw != data_va:
+        raise KernelCtlError(
+            "Stage-0 requires identity-mapped .data "
+            "raw/virtual offsets"
+        )
+
+    if len(source) != data_end:
+        raise KernelCtlError(
+            "Stage-0 source Image does not end at "
+            ".data raw end"
+        )
+
+    stage0_rva = data_end
+
+    #
+    # Exact 32-byte trampoline proven by the standalone R2 lab:
+    #
+    #   adr  x9, stage0_entry
+    #   movz x10, stage0_rva low16
+    #   movk x10, stage0_rva high16
+    #   sub  x9, x9, x10
+    #   movz x10, primary_rva low16
+    #   movk x10, primary_rva high16
+    #   add  x10, x9, x10
+    #   br   x10
+    #
+    words = (
+        0x10000009,
+        _stage0_movz_x(
+            10,
+            stage0_rva & 0xFFFF,
+            0,
+        ),
+        _stage0_movk_x(
+            10,
+            (
+                stage0_rva >> 16
+            ) & 0xFFFF,
+            16,
+        ),
+        0xCB0A0129,
+        _stage0_movz_x(
+            10,
+            primary_rva & 0xFFFF,
+            0,
+        ),
+        _stage0_movk_x(
+            10,
+            (
+                primary_rva >> 16
+            ) & 0xFFFF,
+            16,
+        ),
+        0x8B0A012A,
+        0xD61F0140,
+    )
+
+    stage0 = struct.pack(
+        "<8I",
+        *words,
+    )
+
+    if len(stage0) != 32:
+        raise KernelCtlError(
+            "Stage-0 trampoline size contract failed"
+        )
+
+    size_of_initialized_data = struct.unpack_from(
+        "<I",
+        source,
+        optional + 8,
+    )[0]
+
+    file_alignment = struct.unpack_from(
+        "<I",
+        source,
+        optional + 36,
+    )[0]
+
+    if file_alignment == 0:
+        raise KernelCtlError(
+            "Stage-0 PE file alignment is zero"
+        )
+
+    new_raw_size = _stage0_align_up(
+        data_raw_size
+        + len(stage0),
+        file_alignment,
+    )
+
+    if (
+        data_va
+        + new_raw_size
+        > virtual_end
+    ):
+        raise KernelCtlError(
+            "Stage-0 trampoline exceeds existing "
+            ".data virtual tail"
+        )
+
+    candidate = bytearray(source)
+
+    candidate.extend(stage0)
+
+    candidate.extend(
+        b"\x00"
+        * (
+            data_raw
+            + new_raw_size
+            - len(candidate)
+        )
+    )
+
+    new_code1 = _stage0_encode_branch(
+        0x04,
+        stage0_rva,
+    )
+
+    struct.pack_into(
+        "<I",
+        candidate,
+        0x04,
+        new_code1,
+    )
+
+    struct.pack_into(
+        "<I",
+        candidate,
+        data_section["offset"] + 16,
+        new_raw_size,
+    )
+
+    #
+    # Preserve read/write and add execute for the tiny Stage-0 tail.
+    #
+    new_flags = (
+        data_section["flags"]
+        | 0x20000000
+    )
+
+    struct.pack_into(
+        "<I",
+        candidate,
+        data_section["offset"] + 36,
+        new_flags,
+    )
+
+    initialized_delta = (
+        new_raw_size
+        - data_raw_size
+    )
+
+    struct.pack_into(
+        "<I",
+        candidate,
+        optional + 8,
+        size_of_initialized_data
+        + initialized_delta,
+    )
+
+    if struct.unpack_from(
+        "<I",
+        candidate,
+        0x00,
+    )[0] != source_code0:
+        raise KernelCtlError(
+            "Stage-0 unexpectedly changed code0"
+        )
+
+    if _stage0_decode_branch(
+        struct.unpack_from(
+            "<I",
+            candidate,
+            0x04,
+        )[0],
+        0x04,
+    ) != stage0_rva:
+        raise KernelCtlError(
+            "Stage-0 code1 redirect verification failed"
+        )
+
+    if (
+        candidate[
+            stage0_rva:
+            stage0_rva + 32
+        ]
+        != stage0
+    ):
+        raise KernelCtlError(
+            "Stage-0 trampoline payload identity failed"
+        )
+
+    return bytes(candidate), {
+        "schema": 1,
+        "mode": "treeforge-stage0-proof",
+        "source_image_sha256": hashlib.sha256(
+            source
+        ).hexdigest(),
+        "candidate_image_sha256": hashlib.sha256(
+            candidate
+        ).hexdigest(),
+        "source_image_bytes": len(source),
+        "candidate_image_bytes": len(candidate),
+        "original_code1": (
+            f"0x{source_code1:08x}"
+        ),
+        "original_primary_rva": (
+            f"0x{primary_rva:x}"
+        ),
+        "stage0_code1": (
+            f"0x{new_code1:08x}"
+        ),
+        "stage0_rva": (
+            f"0x{stage0_rva:x}"
+        ),
+        "stage0_bytes": len(stage0),
+        "data_raw_size_source": (
+            f"0x{data_raw_size:x}"
+        ),
+        "data_raw_size_final": (
+            f"0x{new_raw_size:x}"
+        ),
+        "data_virtual_size": (
+            f"0x{data_vsize:x}"
+        ),
+        "data_flags_source": (
+            f"0x{data_section['flags']:08x}"
+        ),
+        "data_flags_final": (
+            f"0x{new_flags:08x}"
+        ),
+        "pe_initialized_data_source": (
+            f"0x{size_of_initialized_data:x}"
+        ),
+        "pe_initialized_data_final": (
+            f"0x{size_of_initialized_data + initialized_delta:x}"
+        ),
+    }
+
+
+def _verify_stage0_generation(
+    generation: Path,
+) -> None:
+    """
+    Accept modern generations through build.json profile metadata.
+
+    The hardware-accepted 20261005-234423-0400 generation predates
+    that metadata field. Permit only that exact historical generation,
+    and only while its accepted package identities remain exact.
+    """
+    metadata = (
+        generation
+        / "metadata"
+        / "build.json"
+    )
+
+    if metadata.is_file():
+        try:
+            payload = json.loads(
+                metadata.read_text(
+                    encoding="utf-8"
+                )
+            )
+        except Exception as error:
+            raise KernelCtlError(
+                "unable to read Stage-0 source generation "
+                f"metadata: {metadata}: {error}"
+            ) from error
+
+        if (
+            payload.get("build_profile")
+            != "treeforge-bootstrap"
+        ):
+            raise KernelCtlError(
+                "Stage-0 proof requires a completed "
+                "treeforge-bootstrap generation; got "
+                f"{payload.get('build_profile')!r}"
+            )
+
+        print(
+            "Stage-0 generation gate: "
+            "modern build-profile metadata PASS"
+        )
+
+        return
+
+    historical = (
+        ROOT
+        / "out"
+        / "source"
+        / "20261005-234423-0400"
+    ).resolve()
+
+    actual_generation = generation.resolve()
+
+    if actual_generation != historical:
+        raise KernelCtlError(
+            "Stage-0 generation lacks modern build-profile "
+            "metadata and is not the one accepted historical "
+            "treeforge-bootstrap generation:\n"
+            f"  generation={actual_generation}\n"
+            f"  accepted={historical}"
+        )
+
+    package_manifest = (
+        generation
+        / "metadata"
+        / "package.json"
+    )
+
+    need_file(package_manifest)
+
+    try:
+        package_payload = json.loads(
+            package_manifest.read_text(
+                encoding="utf-8"
+            )
+        )
+    except Exception as error:
+        raise KernelCtlError(
+            "unable to read historical package metadata: "
+            f"{package_manifest}: {error}"
+        ) from error
+
+    if (
+        package_payload.get("kernel_release")
+        != "android-15.0.0_r0.94"
+    ):
+        raise KernelCtlError(
+            "historical Stage-0 generation kernel release "
+            "identity mismatch"
+        )
+
+    expected = {
+        "boot.img":
+            "e76754420d5b03918efc77b4d4a16bc"
+            "3fed3d0888a9f323e1efb51aef1f4d2e2",
+        "vendor_kernel_boot.img":
+            "e966eb5212f5c2599c89edfbe231f724"
+            "605a990cf472046752c5d29f27c2b885",
+        "vendor_dlkm.img":
+            "e3603cd6957ceb5b3beca297c794cd346"
+            "b8512b7ec09d2e573800c8f6a688cc4",
+        "system_dlkm.img":
+            "07f497f7b22a566f865a647cc65c7b62"
+            "c7514c69ca8e656c2e6e038af5a66269",
+    }
+
+    package = generation / "package"
+
+    for name, expected_sha in expected.items():
+        artifact = package / name
+
+        need_file(artifact)
+
+        actual_sha = file_sha256(
+            artifact
+        )
+
+        if actual_sha != expected_sha:
+            raise KernelCtlError(
+                "historical Stage-0 generation identity "
+                f"mismatch for {name}:\n"
+                f"  expected={expected_sha}\n"
+                f"  actual={actual_sha}"
+            )
+
+    print(
+        "Stage-0 generation gate: "
+        "accepted historical treeforge-bootstrap "
+        "generation PASS"
+    )
+
+    print(
+        "Historical generation: "
+        "20261005-234423-0400"
+    )
+
+    print(
+        "Historical package identities: PASS"
+    )
+
+
+
+def _stage0_build_ufs_hci_gate(
+    *,
+    stage: Path,
+) -> tuple[bytes, dict]:
+    source = (
+        ROOT
+        / "experimental"
+        / "stage0"
+        / "ufs_hci_gate.S"
+    )
+
+    need_file(source)
+
+    #
+    # TreeForge managed Android kernel toolchain.
+    #
+    toolchain = Path(
+        "/home/skelitonlord/.cache/treeforge/providers/kernel/"
+        "android-15.0.0_r0.94/clang/"
+        "clang-r487747c/bin"
+    )
+
+    clang = toolchain / "clang"
+    objcopy = toolchain / "llvm-objcopy"
+    objdump = toolchain / "llvm-objdump"
+
+    need_file(clang)
+    need_file(objcopy)
+    need_file(objdump)
+
+    work = (
+        stage
+        / ".stage0-ufs-hci-build"
+    )
+
+    if work.exists():
+        shutil.rmtree(work)
+
+    work.mkdir(
+        parents=True,
+        exist_ok=False,
+    )
+
+    obj = work / "ufs_hci_gate.o"
+    binary = work / "ufs_hci_gate.bin"
+    disassembly = work / "ufs_hci_gate.disasm.txt"
+    relocations = work / "ufs_hci_gate.reloc.txt"
+
+    run([
+        clang,
+        "--target=aarch64-linux-gnu",
+        "-c",
+        source,
+        "-o",
+        obj,
+    ])
+
+    reloc = run(
+        [
+            objdump,
+            "-r",
+            obj,
+        ],
+        capture=True,
+    )
+
+    relocations.write_text(
+        reloc.stdout,
+        encoding="utf-8",
+    )
+
+    if "R_AARCH64" in reloc.stdout:
+        raise KernelCtlError(
+            "Stage-0 UFS HCI gate contains relocations"
+        )
+
+    run([
+        objcopy,
+        "-O",
+        "binary",
+        "--only-section=.text",
+        obj,
+        binary,
+    ])
+
+    disasm = run(
+        [
+            objdump,
+            "-d",
+            obj,
+        ],
+        capture=True,
+    )
+
+    disassembly.write_text(
+        disasm.stdout,
+        encoding="utf-8",
+    )
+
+    payload = binary.read_bytes()
+
+    if not payload:
+        raise KernelCtlError(
+            "Stage-0 UFS HCI gate binary is empty"
+        )
+
+    if len(payload) % 4:
+        raise KernelCtlError(
+            "Stage-0 UFS HCI gate is not instruction aligned"
+        )
+
+    if len(payload) > 512:
+        raise KernelCtlError(
+            "Stage-0 UFS HCI gate exceeds reserved "
+            "512-byte executable tail"
+        )
+
+    print()
+    print("TreeForge Stage-0 UFS HCI gate")
+    print("--------------------------------")
+    print(f"Source:       {source}")
+    print(f"Compiler:     {clang}")
+    print(f"Payload:      {len(payload)} bytes")
+    print(
+        "Payload SHA:  "
+        + hashlib.sha256(
+            payload
+        ).hexdigest()
+    )
+    print("Relocations:  none")
+    print("MMIO writes:  none")
+    print()
+    print(disasm.stdout.rstrip())
+    print()
+
+    return payload, {
+        "ufs_hci_gate_source":
+            str(source),
+        "ufs_hci_gate_source_sha256":
+            file_sha256(source),
+        "ufs_hci_gate_payload_bytes":
+            len(payload),
+        "ufs_hci_gate_payload_sha256":
+            hashlib.sha256(
+                payload
+            ).hexdigest(),
+        "ufs_hci_gate_relocations":
+            "none",
+        "ufs_hci_gate_mmio_mode":
+            "read-only",
+        "ufs_hci_base":
+            "0x14700000",
+        "ufs_hci_hcs":
+            "0x14700030",
+        "ufs_hci_hce":
+            "0x14700034",
+        "ufs_hci_required_hce_mask":
+            "0x00000001",
+        "ufs_hci_required_hcs_mask":
+            "0x0000000f",
+        "ufs_hci_utrlba":
+            "0x14700050",
+        "ufs_hci_utrlbau":
+            "0x14700054",
+        "ufs_hci_utrldbr":
+            "0x14700058",
+        "ufs_hci_utrlrsr":
+            "0x14700060",
+        "ufs_hci_required_utrlrsr_mask":
+            "0x00000001",
+        "ufs_hci_required_utrldbr":
+            "0x00000000",
+        "ufs_hci_required_utrl_base":
+            "nonzero",
+        "ufs_hci_gate_contract":
+            "controller-ready+utrl-running-idle+tur-exact-geometry",
+    }
+
+
+def _stage0_apply_ufs_hci_gate(
+    *,
+    candidate: bytes,
+    manifest: dict,
+    payload: bytes,
+) -> tuple[bytes, dict]:
+    stage0_rva = int(
+        manifest["stage0_rva"],
+        16,
+    )
+
+    raw_source = int(
+        manifest["data_raw_size_source"],
+        16,
+    )
+
+    raw_final = int(
+        manifest["data_raw_size_final"],
+        16,
+    )
+
+    capacity = (
+        raw_final
+        - raw_source
+    )
+
+    if capacity != 512:
+        raise KernelCtlError(
+            "Stage-0 UFS gate expected exact "
+            f"512-byte executable tail, got {capacity}"
+        )
+
+    if len(payload) > capacity:
+        raise KernelCtlError(
+            "Stage-0 UFS gate payload exceeds "
+            "reserved executable tail"
+        )
+
+    if (
+        stage0_rva
+        + capacity
+        != len(candidate)
+    ):
+        raise KernelCtlError(
+            "Stage-0 UFS gate Image tail geometry mismatch"
+        )
+
+    result = bytearray(candidate)
+
+    gate1_sha = hashlib.sha256(
+        result
+    ).hexdigest()
+
+    #
+    # Replace only the already-proven Stage-0 executable tail.
+    # PE geometry and the code1 redirect remain unchanged.
+    #
+    result[
+        stage0_rva:
+        stage0_rva + capacity
+    ] = b"\x00" * capacity
+
+    result[
+        stage0_rva:
+        stage0_rva + len(payload)
+    ] = payload
+
+    updated = dict(manifest)
+
+    updated.update({
+        "mode":
+            "treeforge-stage0-ufs-hci-gate",
+        "gate1_r2_candidate_image_sha256":
+            gate1_sha,
+        "candidate_image_sha256":
+            hashlib.sha256(
+                result
+            ).hexdigest(),
+        "candidate_image_bytes":
+            len(result),
+        "stage0_bytes":
+            len(payload),
+        "stage0_reserved_bytes":
+            capacity,
+    })
+
+    return bytes(result), updated
+
+
+def realize_stage0_proof_boot(
+    *,
+    boot: Path,
+    generation: Path | None,
+    stage: Path,
+    ufs_gate: bool = False,
+) -> Path:
+    if generation is not None:
+        _verify_stage0_generation(
+            generation
+        )
+
+    tools = load_treeforge_tools_contract()
+
+    unpack_bootimg = Path(
+        tools["tools"][
+            "unpack_bootimg"
+        ]["path"]
+    )
+
+    need_file(unpack_bootimg)
+
+    lz4 = need_command("lz4")
+
+    work = (
+        stage
+        / ".stage0-proof-work"
+    )
+
+    if work.exists():
+        shutil.rmtree(work)
+
+    unpacked = work / "unpacked"
+    verify = work / "verify"
+
+    unpacked.mkdir(
+        parents=True,
+        exist_ok=False,
+    )
+
+    print()
+    print("TreeForge Stage-0 proof")
+    print("-----------------------")
+    if generation is not None:
+        print(f"Generation: {generation}")
+    else:
+        print(
+            "Source:     Bootstrap v1.0b7 "
+            "kernel provider r0.94-5"
+        )
+
+    print(f"Boot image: {boot}")
+    print("Mode:       packaging-only")
+    print("Source:     immutable")
+
+    run([
+        unpack_bootimg,
+        "--boot_img",
+        boot,
+        "--out",
+        unpacked,
+    ])
+
+    packed_kernel = (
+        unpacked / "kernel"
+    )
+
+    need_file(packed_kernel)
+
+    source_image = (
+        work / "Image.source"
+    )
+
+    run([
+        lz4,
+        "-d",
+        "-f",
+        packed_kernel,
+        source_image,
+    ])
+
+    source_bytes = (
+        source_image.read_bytes()
+    )
+
+    candidate_bytes, manifest = (
+        _stage0_transform_arm64_image(
+            source_bytes
+        )
+    )
+
+    if ufs_gate:
+        (
+            gate_payload,
+            gate_manifest,
+        ) = _stage0_build_ufs_hci_gate(
+            stage=stage
+        )
+
+        (
+            candidate_bytes,
+            manifest,
+        ) = _stage0_apply_ufs_hci_gate(
+            candidate=candidate_bytes,
+            manifest=manifest,
+            payload=gate_payload,
+        )
+
+        manifest.update(
+            gate_manifest
+        )
+
+    candidate_image = (
+        work / "Image.stage0"
+    )
+
+    candidate_image.write_bytes(
+        candidate_bytes
+    )
+
+    packed_candidate = (
+        work / "kernel.stage0.lz4"
+    )
+
+    run([
+        lz4,
+        "-l",
+        "-f",
+        candidate_image,
+        packed_candidate,
+    ])
+
+    packed_source_bytes = (
+        packed_kernel.read_bytes()
+    )
+
+    packed_candidate_bytes = (
+        packed_candidate.read_bytes()
+    )
+
+    boot_bytes = bytearray(
+        boot.read_bytes()
+    )
+
+    if (
+        len(boot_bytes) < 4096
+        or boot_bytes[:8] != b"ANDROID!"
+    ):
+        raise KernelCtlError(
+            "Stage-0 source boot image header invalid"
+        )
+
+    kernel_size = struct.unpack_from(
+        "<I",
+        boot_bytes,
+        8,
+    )[0]
+
+    ramdisk_size = struct.unpack_from(
+        "<I",
+        boot_bytes,
+        12,
+    )[0]
+
+    header_size = struct.unpack_from(
+        "<I",
+        boot_bytes,
+        20,
+    )[0]
+
+    header_version = struct.unpack_from(
+        "<I",
+        boot_bytes,
+        40,
+    )[0]
+
+    if header_version != 4:
+        raise KernelCtlError(
+            "Stage-0 proof requires Android boot "
+            f"header v4, got {header_version}"
+        )
+
+    if ramdisk_size != 0:
+        raise KernelCtlError(
+            "Stage-0 proof requires zero boot ramdisk"
+        )
+
+    if header_size != 1584:
+        raise KernelCtlError(
+            "Stage-0 proof unexpected boot v4 "
+            f"header size: {header_size}"
+        )
+
+    signature_size = struct.unpack_from(
+        "<I",
+        boot_bytes,
+        1580,
+    )[0]
+
+    if signature_size != 0:
+        raise KernelCtlError(
+            "Stage-0 proof requires zero boot "
+            "signature payload"
+        )
+
+    kernel_offset = 4096
+    kernel_end = (
+        kernel_offset
+        + kernel_size
+    )
+
+    old_payload_end = _stage0_align_up(
+        kernel_end,
+        4096,
+    )
+
+    if kernel_end > len(boot_bytes):
+        raise KernelCtlError(
+            "Stage-0 source boot kernel exceeds image"
+        )
+
+    if (
+        bytes(
+            boot_bytes[
+                kernel_offset:
+                kernel_end
+            ]
+        )
+        != packed_source_bytes
+    ):
+        raise KernelCtlError(
+            "Stage-0 unpacked kernel does not match "
+            "boot payload"
+        )
+
+    trailing = boot_bytes[
+        old_payload_end:
+    ]
+
+    if any(trailing):
+        raise KernelCtlError(
+            "Stage-0 refuses unexpected non-zero "
+            "payload after boot kernel"
+        )
+
+    new_kernel_end = (
+        kernel_offset
+        + len(packed_candidate_bytes)
+    )
+
+    new_payload_end = _stage0_align_up(
+        new_kernel_end,
+        4096,
+    )
+
+    output_size = max(
+        len(boot_bytes),
+        new_payload_end,
+    )
+
+    rebuilt = bytearray(
+        boot_bytes[:kernel_offset]
+    )
+
+    rebuilt.extend(
+        packed_candidate_bytes
+    )
+
+    rebuilt.extend(
+        b"\x00"
+        * (
+            output_size
+            - len(rebuilt)
+        )
+    )
+
+    struct.pack_into(
+        "<I",
+        rebuilt,
+        8,
+        len(packed_candidate_bytes),
+    )
+
+    boot.write_bytes(rebuilt)
+
+    verify.mkdir(
+        parents=True,
+        exist_ok=False,
+    )
+
+    run([
+        unpack_bootimg,
+        "--boot_img",
+        boot,
+        "--out",
+        verify,
+    ])
+
+    verified_kernel = (
+        verify / "kernel"
+    )
+
+    need_file(verified_kernel)
+
+    if (
+        verified_kernel.read_bytes()
+        != packed_candidate_bytes
+    ):
+        raise KernelCtlError(
+            "Stage-0 rebuilt boot kernel payload "
+            "verification failed"
+        )
+
+    verified_image = (
+        work / "Image.verify"
+    )
+
+    run([
+        lz4,
+        "-d",
+        "-f",
+        verified_kernel,
+        verified_image,
+    ])
+
+    if (
+        verified_image.read_bytes()
+        != candidate_bytes
+    ):
+        raise KernelCtlError(
+            "Stage-0 rebuilt decompressed Image "
+            "verification failed"
+        )
+
+    manifest.update({
+        "source_boot_kernel_bytes":
+            len(packed_source_bytes),
+        "candidate_boot_kernel_bytes":
+            len(packed_candidate_bytes),
+        "boot_header_version":
+            header_version,
+        "boot_header_size":
+            header_size,
+        "boot_ramdisk_bytes":
+            ramdisk_size,
+        "boot_signature_bytes":
+            signature_size,
+        "boot_candidate_pre_avb_sha256":
+            file_sha256(boot),
+    })
+
+    manifest_path = (
+        stage
+        / "stage0-proof.json"
+    )
+
+    manifest_path.write_text(
+        json.dumps(
+            manifest,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    print(
+        "Stage-0 source Image:    "
+        + manifest[
+            "source_image_sha256"
+        ]
+    )
+
+    print(
+        "Stage-0 candidate Image: "
+        + manifest[
+            "candidate_image_sha256"
+        ]
+    )
+
+    print(
+        "Stage-0 entry RVA:       "
+        + manifest[
+            "stage0_rva"
+        ]
+    )
+
+    print(
+        "Stage-0 trampoline:      "
+        f"{manifest['stage0_bytes']} bytes"
+    )
+
+    print(
+        "Stage-0 manifest:        "
+        f"{manifest_path}"
+    )
+
+    print(
+        "TREEFORGE_STAGE0_PROOF_IMAGE=PASS"
+    )
+
+    return manifest_path
+
+
+
+def realize_stage0_provider_proof(
+    *,
+    signing: str,
+    ufs_gate: bool = False,
+) -> Path:
+    if signing != "treeforge":
+        raise KernelCtlError(
+            "Stage-0 hardware proof requires "
+            "--signing treeforge"
+        )
+
+    source_boot = Path(
+        "/home/skelitonlord/.cache/treeforge/"
+        "bootstrap-kernel/"
+        "treeforge-bootstrap-tangorpro-android15-r0.94-5/"
+        "boot.img"
+    )
+
+    expected_source_boot_sha = (
+        "e76754420d5b03918efc77b4d4a16bc"
+        "3fed3d0888a9f323e1efb51aef1f4d2e2"
+    )
+
+    expected_source_image_sha = (
+        "ec847510babbf88f0352c500be06da38"
+        "d80ebc5c6c94eaf74df1848850e87688"
+    )
+
+    expected_stage0_image_sha = (
+        "17819ca7663101bbce54e639acff1d727"
+        "6e2034227b6989d8ad77f225790495b"
+    )
+
+    need_file(source_boot)
+
+    if source_boot.stat().st_size != 67108864:
+        raise KernelCtlError(
+            "Stage-0 provider boot partition size mismatch"
+        )
+
+    source_boot_sha = file_sha256(
+        source_boot
+    )
+
+    if source_boot_sha != expected_source_boot_sha:
+        raise KernelCtlError(
+            "Stage-0 provider boot identity mismatch:\n"
+            f"  expected={expected_source_boot_sha}\n"
+            f"  actual={source_boot_sha}"
+        )
+
+    #
+    # Resolve tools exactly through kernelctl's normal TreeForge
+    # host-tool provider.
+    #
+    treeforge_tools = provider_script(
+        "kernel-treeforge-tools"
+    )
+
+    run([
+        treeforge_tools,
+        "prepare",
+    ])
+
+    run([
+        treeforge_tools,
+        "verify",
+    ])
+
+    contract = load_treeforge_tools_contract()
+
+    unpack_bootimg = Path(
+        contract["tools"][
+            "unpack_bootimg"
+        ]["path"]
+    )
+
+    need_file(unpack_bootimg)
+
+    avbtool = avbtool_path()
+    lz4 = need_command("lz4")
+
+    #
+    # Owner AVB identity stays under the normal kernelctl path.
+    #
+    keys = provider_keys(
+        signing
+    )
+
+    expected_public_sha1 = public_key_sha1(
+        keys["boot"]
+    )
+
+    source_info = avb_info(
+        source_boot
+    )
+
+    source_algorithm = field(
+        source_info,
+        "Algorithm",
+    )
+
+    if source_algorithm != "SHA256_RSA2048":
+        raise KernelCtlError(
+            "Stage-0 provider boot AVB algorithm mismatch: "
+            f"{source_algorithm}"
+        )
+
+    stage = (
+        ROOT
+        / "out"
+        / (
+            "stage0-ufs-hci-gate"
+            if ufs_gate
+            else "stage0-proof"
+        )
+        / "bootstrap-v1.0b7-r0.94-5"
+    )
+
+    if stage.exists():
+        shutil.rmtree(stage)
+
+    stage.mkdir(
+        parents=True,
+        exist_ok=False,
+    )
+
+    boot = stage / "boot.img"
+
+    copy_clean(
+        source_boot,
+        boot,
+    )
+
+    print()
+    print("TreeForge Stage-0 Provider Proof")
+    print("===============================")
+    print("Bootstrap:       v1.0b7")
+    print("Kernel provider: r0.94-5")
+    print(f"Source boot:     {source_boot}")
+    print(
+        "Source SHA256:   "
+        f"{source_boot_sha}"
+    )
+    print(f"Output:          {boot}")
+    print("Signing:         TreeForge Owner AVB")
+    print()
+
+    #
+    # Remove only the source boot's current AVB footer.
+    #
+    run([
+        avbtool,
+        "erase_footer",
+        "--image",
+        boot,
+    ])
+
+    #
+    # The accepted r0.94-5 provider carries the standard trailing
+    # 16 KiB GKI boot certificate after the Android boot payload.
+    #
+    # Once the kernel changes that certificate is stale. This follows
+    # the same detection model used by Android certify_bootimg:
+    # identify the trailing 16 KiB as AVB metadata and remove it before
+    # reconstructing the modified kernel payload.
+    #
+    gki_signature_size = 16 * 1024
+
+    erased_boot = boot.read_bytes()
+
+    if len(erased_boot) <= gki_signature_size:
+        raise KernelCtlError(
+            "Stage-0 erased provider boot is too small "
+            "to contain the expected GKI certificate"
+        )
+
+    gki_signature = (
+        erased_boot[
+            -gki_signature_size:
+        ]
+    )
+
+    if not gki_signature.startswith(
+        b"AVB0"
+    ):
+        raise KernelCtlError(
+            "Stage-0 expected trailing GKI certificate "
+            "does not begin with AVB0"
+        )
+
+    signature_probe = (
+        stage
+        / ".gki-boot-signature.bin"
+    )
+
+    signature_probe.write_bytes(
+        gki_signature
+    )
+
+    probe = run(
+        [
+            avbtool,
+            "info_image",
+            "--image",
+            signature_probe,
+        ],
+        capture=True,
+        check=False,
+    )
+
+    if probe.returncode != 0:
+        raise KernelCtlError(
+            "Stage-0 trailing 16 KiB block is not a "
+            "valid GKI AVB certificate"
+        )
+
+    second_avb = gki_signature.find(
+        b"AVB0",
+        4,
+    )
+
+    if second_avb < 0:
+        raise KernelCtlError(
+            "Stage-0 expected concatenated GKI "
+            "boot/generic-kernel certificates"
+        )
+
+    boot.write_bytes(
+        erased_boot[
+            :-gki_signature_size
+        ]
+    )
+
+    print()
+    print("GKI boot certificate")
+    print("--------------------")
+    print(
+        "Certificate bytes: "
+        f"{gki_signature_size}"
+    )
+    print(
+        "First AVB0:        0x0"
+    )
+    print(
+        "Second AVB0:       "
+        f"0x{second_avb:x}"
+    )
+    print(
+        "Action:            removed before "
+        "Stage-0 kernel reconstruction"
+    )
+    print(
+        "GKI_BOOT_CERTIFICATE_STRIPPED=PASS"
+    )
+
+    #
+    # Apply and internally verify the exact R2 Stage-0 transform.
+    #
+    manifest_path = realize_stage0_proof_boot(
+        boot=boot,
+        generation=None,
+        stage=stage,
+        ufs_gate=ufs_gate,
+    )
+
+    manifest = json.loads(
+        manifest_path.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    if (
+        manifest.get("source_image_sha256")
+        != expected_source_image_sha
+    ):
+        raise KernelCtlError(
+            "Stage-0 provider decompressed source Image "
+            "does not match accepted r0.94-5 Image"
+        )
+
+    if ufs_gate:
+        if (
+            manifest.get(
+                "gate1_r2_candidate_image_sha256"
+            )
+            != expected_stage0_image_sha
+        ):
+            raise KernelCtlError(
+                "Stage-0 UFS gate did not originate "
+                "from the hardware-proven Gate-1 R2 Image"
+            )
+    else:
+        if (
+            manifest.get("candidate_image_sha256")
+            != expected_stage0_image_sha
+        ):
+            raise KernelCtlError(
+                "Stage-0 integrated candidate does not "
+                "byte-match standalone R2"
+            )
+
+    print(
+        "Standalone R2 Image identity: PASS"
+    )
+
+    #
+    # Re-add the boot footer with the same Owner boot identity and
+    # the AVB metadata inherited from the accepted provider image.
+    #
+    add_hash_footer(
+        boot,
+        partition_name="boot",
+        partition_size=source_boot.stat().st_size,
+        key=keys["boot"],
+        algorithm=source_algorithm,
+        rollback_index=integer_field(
+            source_info,
+            "Rollback Index",
+        ),
+        salt=field(
+            source_info,
+            "Salt",
+        ),
+        props=properties(
+            source_info
+        ),
+    )
+
+    if boot.stat().st_size != 67108864:
+        raise KernelCtlError(
+            "Stage-0 final boot partition size mismatch"
+        )
+
+    final_info = avb_info(
+        boot
+    )
+
+    final_public_sha1 = field(
+        final_info,
+        "Public key (sha1)",
+    )
+
+    if final_public_sha1 != expected_public_sha1:
+        raise KernelCtlError(
+            "Stage-0 final Owner boot public-key "
+            "identity mismatch"
+        )
+
+    run([
+        avbtool,
+        "verify_image",
+        "--image",
+        boot,
+    ])
+
+    #
+    # Verify the final AVB-bearing image still contains the exact
+    # already-audited Stage-0 Image.
+    #
+    final_verify = (
+        stage
+        / ".final-verify"
+    )
+
+    final_verify.mkdir(
+        parents=True,
+        exist_ok=False,
+    )
+
+    run([
+        unpack_bootimg,
+        "--boot_img",
+        boot,
+        "--out",
+        final_verify,
+    ])
+
+    final_kernel = (
+        final_verify
+        / "kernel"
+    )
+
+    need_file(final_kernel)
+
+    final_image = (
+        final_verify
+        / "Image"
+    )
+
+    run([
+        lz4,
+        "-d",
+        "-f",
+        final_kernel,
+        final_image,
+    ])
+
+    final_image_sha = file_sha256(
+        final_image
+    )
+
+    expected_final_image_sha = (
+        manifest["candidate_image_sha256"]
+        if ufs_gate
+        else expected_stage0_image_sha
+    )
+
+    if final_image_sha != expected_final_image_sha:
+        raise KernelCtlError(
+            "Stage-0 final packaged Image identity mismatch:\n"
+            f"  expected={expected_final_image_sha}\n"
+            f"  actual={final_image_sha}"
+        )
+
+    final_boot_sha = file_sha256(
+        boot
+    )
+
+    #
+    # Source provider must still be immutable.
+    #
+    if file_sha256(
+        source_boot
+    ) != expected_source_boot_sha:
+        raise KernelCtlError(
+            "Stage-0 source provider boot was modified"
+        )
+
+    manifest.update({
+        "bootstrap_version":
+            "v1.0b7",
+        "kernel_provider":
+            "r0.94-5",
+        "provider_boot_path":
+            str(source_boot),
+        "provider_boot_sha256":
+            expected_source_boot_sha,
+        "expected_stage0_image_sha256":
+            expected_stage0_image_sha,
+        "final_stage0_image_sha256":
+            final_image_sha,
+        "stage0_hardware_gate":
+            (
+                "ufs-hci-ready"
+                if ufs_gate
+                else "entry-handoff"
+            ),
+        "final_boot_sha256":
+            final_boot_sha,
+        "final_boot_bytes":
+            boot.stat().st_size,
+        "owner_boot_public_sha1":
+            final_public_sha1,
+        "final_avb_verify":
+            "PASS",
+        "source_provider_immutable":
+            "PASS",
+        "gki_boot_certificate_source_bytes":
+            gki_signature_size,
+        "gki_boot_certificate_second_avb_offset":
+            f"0x{second_avb:x}",
+        "gki_boot_certificate_action":
+            "stripped-for-stage0-hardware-proof",
+    })
+
+    manifest_path.write_text(
+        json.dumps(
+            manifest,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    print()
+    print("Stage-0 provider proof complete")
+    print("-------------------------------")
+    print(
+        "Provider boot SHA256: "
+        f"{expected_source_boot_sha}"
+    )
+    print(
+        "Stage-0 Image SHA256: "
+        f"{final_image_sha}"
+    )
+    print(
+        "Final boot SHA256:    "
+        f"{final_boot_sha}"
+    )
+    print(
+        "Owner boot pub SHA1:  "
+        f"{final_public_sha1}"
+    )
+    print(
+        "Final boot bytes:     "
+        f"{boot.stat().st_size}"
+    )
+    print(f"Manifest:             {manifest_path}")
+    print(f"Candidate:            {boot}")
+    print()
+    print("STANDALONE_R2_IDENTITY=PASS")
+    print("OWNER_BOOT_SIGNING=PASS")
+    print("FINAL_BOOT_AVB_VERIFY=PASS")
+    print("SOURCE_PROVIDER_IMMUTABILITY=PASS")
+    print("TREEFORGE_STAGE0_PROVIDER_PROOF=PASS")
+
+    return boot
+
+
 def package_source_generation(
     *,
     generation: Path,
     raw: Path,
     signing: str,
+    stage0_proof: bool = False,
 ) -> Path:
     if signing == "none":
         raise KernelCtlError(
@@ -4051,7 +5870,12 @@ def package_source_generation(
     for name in reference_names:
         need_file(AOSP_PRODUCT / name)
 
-    stage = generation / "package"
+    stage = generation / (
+        "package-stage0-proof"
+        if stage0_proof
+        else "package"
+    )
+
     stage.mkdir(
         parents=True,
         exist_ok=True,
@@ -4088,6 +5912,13 @@ def package_source_generation(
         "--image",
         boot,
     ])
+
+    if stage0_proof:
+        realize_stage0_proof_boot(
+            boot=boot,
+            generation=generation,
+            stage=stage,
+        )
 
     add_hash_footer(
         boot,
@@ -4914,6 +6745,34 @@ def build_command(argv) -> int:
     )
 
     parser.add_argument(
+        "--generation",
+        type=Path,
+        help=(
+            "completed out/source generation to package; "
+            "package-only only"
+        ),
+    )
+
+    parser.add_argument(
+        "--stage0-proof",
+        action="store_true",
+        help=(
+            "experimental package-only TreeForge Stage-0 "
+            "boot-entry proof; requires treeforge-bootstrap"
+        ),
+    )
+
+    parser.add_argument(
+        "--stage0-ufs-gate",
+        action="store_true",
+        help=(
+            "experimental packaging-only Stage-0 "
+            "read-only GS201 UFS HCI readiness gate; "
+            "requires treeforge-bootstrap"
+        ),
+    )
+
+    parser.add_argument(
         "--profile",
         choices=BUILD_PROFILE_ORDER,
         help=(
@@ -4933,6 +6792,58 @@ def build_command(argv) -> int:
         profile
     )
 
+    if (
+        args.generation is not None
+        and not args.package_only
+    ):
+        raise KernelCtlError(
+            "--generation is valid only with --package-only"
+        )
+
+    if (
+        args.stage0_proof
+        and not args.package_only
+    ):
+        raise KernelCtlError(
+            "--stage0-proof is valid only with --package-only"
+        )
+
+    if (
+        args.stage0_proof
+        and profile != "treeforge-bootstrap"
+    ):
+        raise KernelCtlError(
+            "--stage0-proof requires "
+            "--profile treeforge-bootstrap"
+        )
+
+    if (
+        args.stage0_ufs_gate
+        and not args.package_only
+    ):
+        raise KernelCtlError(
+            "--stage0-ufs-gate is valid only with "
+            "--package-only"
+        )
+
+    if (
+        args.stage0_ufs_gate
+        and profile != "treeforge-bootstrap"
+    ):
+        raise KernelCtlError(
+            "--stage0-ufs-gate requires "
+            "--profile treeforge-bootstrap"
+        )
+
+    if (
+        args.stage0_ufs_gate
+        and args.stage0_proof
+    ):
+        raise KernelCtlError(
+            "select either --stage0-proof or "
+            "--stage0-ufs-gate, not both"
+        )
+
     if args.plan_only:
         print_build_profile_recipe_plan(profile)
         kernel_build_plan()
@@ -4944,8 +6855,70 @@ def build_command(argv) -> int:
 
         return 0
 
+    if (
+        args.package_only
+        and args.stage0_ufs_gate
+    ):
+        candidate = realize_stage0_provider_proof(
+            signing=args.signing,
+            ufs_gate=True,
+        )
+
+        print()
+        print("Kernel Stage-0 UFS HCI gate complete")
+        print("------------------------------------")
+        print(f"Candidate boot: {candidate}")
+        print("MMIO MODE: READ ONLY")
+        print("KERNEL BUILD STARTED: NO")
+        print("DEVICE MODIFIED: NO")
+        print("ADB INVOKED: NO")
+        print("FASTBOOT INVOKED: NO")
+
+        return 0
+
+    if (
+        args.package_only
+        and args.stage0_proof
+        and args.generation is None
+    ):
+        candidate = realize_stage0_provider_proof(
+            signing=args.signing
+        )
+
+        print()
+        print("Kernel Stage-0 proof complete")
+        print("-----------------------------")
+        print(f"Candidate boot: {candidate}")
+        print("KERNEL BUILD STARTED: NO")
+        print("DEVICE MODIFIED: NO")
+        print("ADB INVOKED: NO")
+        print("FASTBOOT INVOKED: NO")
+
+        return 0
+
     if args.package_only:
-        generation, raw = latest_source_generation()
+        if args.generation is not None:
+            generation = (
+                args.generation
+                .expanduser()
+                .resolve()
+            )
+
+            raw = generation / "raw"
+
+            if not generation.is_dir():
+                raise KernelCtlError(
+                    f"generation directory missing: "
+                    f"{generation}"
+                )
+
+            need_file(
+                raw / "boot.img"
+            )
+        else:
+            generation, raw = (
+                latest_source_generation()
+            )
 
         print("TreeForge Kernel Package")
         print("========================")
@@ -4959,6 +6932,7 @@ def build_command(argv) -> int:
             generation=generation,
             raw=raw,
             signing=args.signing,
+            stage0_proof=args.stage0_proof,
         )
 
         print()
