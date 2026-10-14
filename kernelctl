@@ -6286,22 +6286,32 @@ def interactive():
 
 
 def setup_run(args, *, cwd: Path):
-    print("+", " ".join(str(value) for value in args))
+    print(
+        "+",
+        " ".join(
+            str(value)
+            for value in args
+        ),
+        flush=True,
+    )
 
-    result = subprocess.run(
-        [str(value) for value in args],
-        cwd=str(cwd),
-        text=True,
-        check=False,
+    result = run_live_terminal(
+        args,
+        cwd=cwd,
+        env=os.environ.copy(),
     )
 
     if result.returncode != 0:
         raise KernelCtlError(
             f"command failed ({result.returncode}): "
-            + " ".join(str(value) for value in args)
+            + " ".join(
+                str(value)
+                for value in args
+            )
         )
 
     return result
+
 
 
 def setup_definition(root: Path) -> tuple[dict, list[dict]]:
