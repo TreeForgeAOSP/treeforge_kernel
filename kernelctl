@@ -4742,6 +4742,311 @@ def package_source_generation(
     return boot
 
 
+
+def preserve_signed_panthor_family(
+    *,
+    generation: Path,
+) -> Path:
+    """
+    Preserve the exact signed Panthor module family produced by
+    this kernel build into the immutable source generation.
+
+    The module signing key is owned by the kernel build itself.
+    Pixel Partitioner / Owner AVB must never re-sign these .ko
+    files.
+    """
+
+    module_paths = {
+        "gpu-sched.ko": Path(
+            "drivers/gpu/drm/scheduler/gpu-sched.ko"
+        ),
+        "drm_exec.ko": Path(
+            "drivers/gpu/drm/drm_exec.ko"
+        ),
+        "drm_gpuvm.ko": Path(
+            "drivers/gpu/drm/drm_gpuvm.ko"
+        ),
+        "panthor.ko": Path(
+            "drivers/gpu/drm/panthor/panthor.ko"
+        ),
+    }
+
+    #
+    # Prefer Bazel's canonical workspace output symlink.
+    #
+
+    direct = (
+        ROOT
+        / "bazel-bin"
+        / "aosp"
+        / "kernel_aarch64_modules_install"
+        / "staging"
+        / "lib"
+        / "modules"
+    )
+
+    staging_roots = []
+
+    if direct.is_dir():
+        staging_roots.append(direct)
+    else:
+        #
+        # TreeForge's Bazel wrapper keeps output_user_root under
+        # out/bazel. This fallback must resolve uniquely so stale
+        # or unrelated build trees can never be selected silently.
+        #
+
+        output_root = (
+            ROOT
+            / "out"
+            / "bazel"
+            / "output_user_root"
+        )
+
+        if output_root.is_dir():
+            staging_roots = sorted(
+                path
+                for path in output_root.glob(
+                    "*/execroot/__main__/"
+                    "bazel-out/k8-fastbuild/bin/"
+                    "aosp/"
+                    "kernel_aarch64_modules_install/"
+                    "staging/lib/modules"
+                )
+                if path.is_dir()
+            )
+
+    if len(staging_roots) != 1:
+        raise KernelCtlError(
+            "signed Panthor staging root must resolve "
+            "uniquely; found "
+            f"{len(staging_roots)}"
+        )
+
+    staging_root = staging_roots[0]
+
+    families = []
+
+    for abi_dir in sorted(staging_root.iterdir()):
+        if not abi_dir.is_dir():
+            continue
+
+        kernel_root = abi_dir / "kernel"
+
+        sources = {
+            name: kernel_root / relative
+            for name, relative in module_paths.items()
+        }
+
+        if all(
+            path.is_file()
+            for path in sources.values()
+        ):
+            families.append(
+                (
+                    abi_dir.name,
+                    sources,
+                )
+            )
+
+    if len(families) != 1:
+        raise KernelCtlError(
+            "signed Panthor module family must resolve "
+            "uniquely; found "
+            f"{len(families)}"
+        )
+
+    kernel_abi, sources = families[0]
+
+    modinfo = shutil.which("modinfo")
+
+    if not modinfo:
+        raise KernelCtlError(
+            "modinfo is required to validate signed "
+            "Panthor modules"
+        )
+
+    target = (
+        generation
+        / "raw"
+        / "panthor-signed"
+    )
+
+    if target.exists():
+        raise KernelCtlError(
+            "signed Panthor generation output already exists: "
+            f"{target}"
+        )
+
+    target.mkdir(
+        parents=True,
+        exist_ok=False,
+    )
+
+    common_signer = None
+    common_sig_key = None
+    entries = []
+
+    def module_field(
+        module: Path,
+        field: str,
+    ) -> str:
+        result = subprocess.run(
+            [
+                modinfo,
+                "-F",
+                field,
+                str(module),
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            raise KernelCtlError(
+                f"modinfo failed for {module.name} "
+                f"field {field}: "
+                f"{result.stderr.strip()}"
+            )
+
+        return result.stdout.strip()
+
+    for name in (
+        "gpu-sched.ko",
+        "drm_exec.ko",
+        "drm_gpuvm.ko",
+        "panthor.ko",
+    ):
+        source = sources[name]
+
+        vermagic = module_field(
+            source,
+            "vermagic",
+        )
+        signer = module_field(
+            source,
+            "signer",
+        )
+        sig_key = module_field(
+            source,
+            "sig_key",
+        )
+        sig_hash = module_field(
+            source,
+            "sig_hashalgo",
+        )
+        depends = module_field(
+            source,
+            "depends",
+        )
+        license_value = module_field(
+            source,
+            "license",
+        )
+
+        module_abi = (
+            vermagic.split()[0]
+            if vermagic
+            else ""
+        )
+
+        if module_abi != kernel_abi:
+            raise KernelCtlError(
+                f"{name}: Panthor ABI mismatch: "
+                f"{module_abi!r} != {kernel_abi!r}"
+            )
+
+        if not signer:
+            raise KernelCtlError(
+                f"{name}: signed Panthor module has "
+                "no signer"
+            )
+
+        if not sig_key:
+            raise KernelCtlError(
+                f"{name}: signed Panthor module has "
+                "no signature key"
+            )
+
+        if common_signer is None:
+            common_signer = signer
+        elif signer != common_signer:
+            raise KernelCtlError(
+                f"{name}: Panthor signer mismatch"
+            )
+
+        if common_sig_key is None:
+            common_sig_key = sig_key
+        elif sig_key != common_sig_key:
+            raise KernelCtlError(
+                f"{name}: Panthor signature-key mismatch"
+            )
+
+        destination = target / name
+
+        shutil.copy2(
+            source,
+            destination,
+        )
+
+        digest = hashlib.sha256(
+            destination.read_bytes()
+        ).hexdigest()
+
+        entries.append({
+            "name": name,
+            "sha256": digest,
+            "bytes": destination.stat().st_size,
+            "vermagic": vermagic,
+            "license": license_value,
+            "depends": depends,
+            "signer": signer,
+            "sig_key": sig_key,
+            "sig_hash": sig_hash,
+        })
+
+    manifest = {
+        "schema":
+            "treeforge.kernel."
+            "panthor-signed-generation.v1",
+        "kernel_abi": kernel_abi,
+        "module_count": len(entries),
+        "signer": common_signer,
+        "sig_key": common_sig_key,
+        "source":
+            "kleaf-modules_install-staging",
+        "modules": entries,
+    }
+
+    (
+        target
+        / "manifest.json"
+    ).write_text(
+        json.dumps(
+            manifest,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    print()
+    print("Signed Panthor generation family")
+    print("--------------------------------")
+    print(f"Source:     {staging_root}")
+    print(f"Output:     {target}")
+    print(f"Kernel ABI: {kernel_abi}")
+    print(f"Signer:     {common_signer}")
+    print(f"Sig key:    {common_sig_key}")
+    print(
+        "Modules:    "
+        + str(len(entries))
+    )
+
+    return target
+
+
 def execute_kernel_build(
     signing: str,
     profile: str,
@@ -4856,6 +5161,11 @@ def execute_kernel_build(
         )
 
     verify_raw_build(raw)
+
+    if profile == "treeforge-bootstrap":
+        preserve_signed_panthor_family(
+            generation=generation,
+        )
 
     package_boot = package_source_generation(
         generation=generation,

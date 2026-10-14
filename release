@@ -57,11 +57,22 @@ for generation in source.iterdir():
 
     package = generation / "package"
 
+    signed_panthor = (
+        generation
+        / "raw"
+        / "panthor-signed"
+    )
+
     required = (
         package / "boot.img",
         package / "vendor_kernel_boot.img",
         package / "vendor_dlkm.img",
         package / "system_dlkm.img",
+        signed_panthor / "manifest.json",
+        signed_panthor / "gpu-sched.ko",
+        signed_panthor / "drm_exec.ko",
+        signed_panthor / "drm_gpuvm.ko",
+        signed_panthor / "panthor.ko",
     )
 
     if not all(path.is_file() for path in required):
@@ -98,19 +109,31 @@ print(accepted[-1])
 PY
 }
 
-GENERATION="$(find_generation)"
-
 echo "TreeForge Kernel release"
 echo "========================"
 echo "Version:    $VERSION"
-echo "Generation: $GENERATION"
-echo
 
-./kernelctl release \
-    --version "$VERSION" \
-    --generation "$GENERATION"
+if [ "$MODE" = "prepare" ]; then
+    GENERATION="$(find_generation)"
+
+    echo "Generation: $GENERATION"
+    echo
+
+    ./kernelctl release \
+        --version "$VERSION" \
+        --generation "$GENERATION"
+else
+    echo "Mode:       publish prepared assets"
+    echo
+fi
 
 ASSETS="$ROOT/out/releases/$VERSION/assets"
+
+if [ ! -d "$ASSETS" ]; then
+    echo "ERROR: prepared release assets missing: $ASSETS" >&2
+    echo "Run ./release first." >&2
+    exit 1
+fi
 
 for name in \
     boot.img \
@@ -133,6 +156,19 @@ mapfile -t MODULE_ARCHIVES < <(
 
 if [ "${#MODULE_ARCHIVES[@]}" -ne 1 ]; then
     echo "ERROR: expected exactly one module archive" >&2
+    exit 1
+fi
+
+mapfile -t PANTHOR_ARCHIVES < <(
+    find "$ASSETS" \
+        -maxdepth 1 \
+        -type f \
+        -name 'treeforge-kernel-panthor-*.tar.zst' \
+        -print
+)
+
+if [ "${#PANTHOR_ARCHIVES[@]}" -ne 1 ]; then
+    echo "ERROR: expected exactly one Panthor provider archive" >&2
     exit 1
 fi
 
@@ -199,6 +235,14 @@ grep -q \
     'preserve all non-module content' \
     README.md
 
+grep -q \
+    'matching signed four-module Panthor family' \
+    README.md
+
+grep -q \
+    'Owner AVB does not re-sign kernel modules' \
+    README.md
+
 echo "README_CONTRACT=PASS"
 echo "CHECKSUMS=PASS"
 
@@ -261,11 +305,11 @@ cat > "$NOTES" <<NOTES
 
 Pixel Tablet (tangorpro), Android 15.
 
-- Kernel and coherent module provider.
-- Local proprietary carriers are preserved.
-- Provider module trees are replaced.
-- Module metadata is regenerated.
-- Owner AVB is applied locally.
+- Unified Android and ChromiumOS kernel.
+- Coherent Android kernel-module provider.
+- Matching signed Panthor 1.7 provider.
+- Proprietary carrier content is preserved and reconstructed locally.
+- Owner AVB is applied locally by Pixel Partitioner.
 NOTES
 
 git tag -a \

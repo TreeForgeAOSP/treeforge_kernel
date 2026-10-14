@@ -68,6 +68,36 @@ def latest_generation(root: Path) -> Path:
         and (p / "package" / "vendor_kernel_boot.img").is_file()
         and (p / "package" / "vendor_dlkm.img").is_file()
         and (p / "package" / "system_dlkm.img").is_file()
+        and (
+            p
+            / "raw"
+            / "panthor-signed"
+            / "manifest.json"
+        ).is_file()
+        and (
+            p
+            / "raw"
+            / "panthor-signed"
+            / "gpu-sched.ko"
+        ).is_file()
+        and (
+            p
+            / "raw"
+            / "panthor-signed"
+            / "drm_exec.ko"
+        ).is_file()
+        and (
+            p
+            / "raw"
+            / "panthor-signed"
+            / "drm_gpuvm.ko"
+        ).is_file()
+        and (
+            p
+            / "raw"
+            / "panthor-signed"
+            / "panthor.ko"
+        ).is_file()
     ] if base.is_dir() else []
     if not candidates:
         raise ReleaseError("no completed packaged kernel generation found")
@@ -477,129 +507,258 @@ def main() -> int:
     #
     # ChromiumOS Panthor provider
     # ---------------------------
-    # These modules are not members of Android's vendor_dlkm/system_dlkm
-    # image trees. Kleaf emits them as standalone modules in raw/. Keep
-    # the Android coherent family independent, but package the matching
-    # four-module Panthor family from this exact generation when present.
     #
-    panthor_archive = None
+    # The unified treeforge-bootstrap kernel generation preserves
+    # the exact signed modules_install output under
+    # raw/panthor-signed. The release must consume those exact
+    # bytes. Never package unstripped or unsigned module copies.
+    #
+
     raw = generation / "raw"
 
-    found = {
-        name: sorted(
-            p for p in raw.rglob(name)
-            if p.is_file()
+    signed_root = (
+        raw
+        / "panthor-signed"
+    )
+
+    if not signed_root.is_dir():
+        raise ReleaseError(
+            "signed Panthor generation family missing: "
+            f"{signed_root}"
         )
-        for name in PANTHOR
-    }
 
-    present = [
-        name
-        for name, paths in found.items()
-        if paths
-    ]
+    signed_manifest_path = need(
+        signed_root
+        / "manifest.json"
+    )
 
-    if present:
-        missing = [
-            name
-            for name, paths in found.items()
-            if not paths
-        ]
+    try:
+        signed_manifest = json.loads(
+            signed_manifest_path.read_text(
+                encoding="utf-8"
+            )
+        )
+    except Exception as error:
+        raise ReleaseError(
+            "unable to parse signed Panthor generation "
+            f"manifest: {error}"
+        ) from error
 
-        ambiguous = [
-            name
-            for name, paths in found.items()
-            if len(paths) != 1
-        ]
+    if (
+        signed_manifest.get("schema")
+        !=
+        "treeforge.kernel."
+        "panthor-signed-generation.v1"
+    ):
+        raise ReleaseError(
+            "signed Panthor generation manifest schema "
+            "mismatch"
+        )
 
-        if missing or ambiguous:
+    if signed_manifest.get("kernel_abi") != abi:
+        raise ReleaseError(
+            "signed Panthor generation ABI mismatch: "
+            f"{signed_manifest.get('kernel_abi')!r} "
+            f"!= {abi!r}"
+        )
+
+    source_entries = (
+        signed_manifest.get("modules")
+    )
+
+    if not isinstance(
+        source_entries,
+        list,
+    ):
+        raise ReleaseError(
+            "signed Panthor generation manifest modules "
+            "must be a list"
+        )
+
+    source_by_name = {}
+
+    for record in source_entries:
+        if not isinstance(record, dict):
             raise ReleaseError(
-                "Panthor raw module family is incomplete/ambiguous: "
-                f"missing={missing} ambiguous={ambiguous}"
+                "invalid signed Panthor generation "
+                "module record"
             )
 
-        pname = (
-            "treeforge-kernel-panthor-"
-            f"tangorpro-android15-{version}"
+        name = record.get("name")
+
+        if name in source_by_name:
+            raise ReleaseError(
+                "duplicate signed Panthor generation "
+                f"module: {name!r}"
+            )
+
+        source_by_name[name] = record
+
+    if set(source_by_name) != set(PANTHOR):
+        raise ReleaseError(
+            "signed Panthor generation module set "
+            "does not match required 4-module family"
         )
 
-        pstage = stage / pname
-        pstage.mkdir()
+    pname = (
+        "treeforge-kernel-panthor-"
+        f"tangorpro-android15-{version}"
+    )
 
-        entries = []
+    pstage = stage / pname
+    pstage.mkdir()
 
-        for name in PANTHOR:
-            source = found[name][0]
-            info = modinfo(source)
+    entries = []
 
-            module_abi = (
-                info["vermagic"].split()[0]
-                if info["vermagic"]
-                else ""
+    family_signer = None
+    family_sig_key = None
+
+    for name in PANTHOR:
+        source = need(
+            signed_root
+            / name
+        )
+
+        source_record = (
+            source_by_name[name]
+        )
+
+        source_sha = sha256(source)
+
+        if (
+            source_record.get("sha256")
+            != source_sha
+        ):
+            raise ReleaseError(
+                f"{name}: signed generation SHA256 "
+                "mismatch"
             )
 
-            if module_abi != abi:
-                raise ReleaseError(
-                    f"{name}: Panthor ABI mismatch: "
-                    f"{module_abi!r} != {abi!r}"
-                )
+        info = modinfo(source)
 
-            target = pstage / name
-            shutil.copy2(
-                source,
-                target,
+        module_abi = (
+            info["vermagic"].split()[0]
+            if info["vermagic"]
+            else ""
+        )
+
+        if module_abi != abi:
+            raise ReleaseError(
+                f"{name}: Panthor ABI mismatch: "
+                f"{module_abi!r} != {abi!r}"
             )
 
-            entries.append({
-                "name": name,
-                "source": source.relative_to(
+        if not info["signer"]:
+            raise ReleaseError(
+                f"{name}: Panthor module signer missing"
+            )
+
+        if not info["sig_key"]:
+            raise ReleaseError(
+                f"{name}: Panthor module signature "
+                "key missing"
+            )
+
+        if family_signer is None:
+            family_signer = info["signer"]
+        elif info["signer"] != family_signer:
+            raise ReleaseError(
+                f"{name}: Panthor signer mismatch"
+            )
+
+        if family_sig_key is None:
+            family_sig_key = info["sig_key"]
+        elif info["sig_key"] != family_sig_key:
+            raise ReleaseError(
+                f"{name}: Panthor signature-key mismatch"
+            )
+
+        if (
+            source_record.get("signer")
+            != info["signer"]
+        ):
+            raise ReleaseError(
+                f"{name}: signed-generation signer "
+                "metadata mismatch"
+            )
+
+        if (
+            source_record.get("sig_key")
+            != info["sig_key"]
+        ):
+            raise ReleaseError(
+                f"{name}: signed-generation signature "
+                "key metadata mismatch"
+            )
+
+        target = pstage / name
+
+        shutil.copy2(
+            source,
+            target,
+        )
+
+        entries.append({
+            "name": name,
+            "source":
+                f"raw/panthor-signed/{name}",
+            "sha256": sha256(target),
+            "bytes": target.stat().st_size,
+            "vermagic": info["vermagic"],
+            "license": info["license"],
+            "depends": info["depends"],
+            "signer": info["signer"],
+            "sig_key": info["sig_key"],
+        })
+
+    (
+        pstage
+        / "manifest.json"
+    ).write_text(
+        json.dumps(
+            {
+                "schema":
+                    "treeforge.kernel."
+                    "panthor-provider.v1",
+                "release": version,
+                "target": "tangorpro",
+                "android_base": "android15",
+                "generation": str(
                     generation
-                ).as_posix(),
-                "sha256": sha256(target),
-                "bytes": target.stat().st_size,
-                "vermagic": info["vermagic"],
-                "license": info["license"],
-                "depends": info["depends"],
-                "signer": info["signer"],
-                "sig_key": info["sig_key"],
-            })
-
-        (
-            pstage
-            / "manifest.json"
-        ).write_text(
-            json.dumps(
-                {
-                    "schema":
-                        "treeforge.kernel.panthor-provider.v1",
-                    "release": version,
-                    "target": "tangorpro",
-                    "android_base": "android15",
-                    "generation": str(generation),
-                    "kernel_abi": abi,
-                    "module_count": len(entries),
-                    "modules": entries,
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n"
+                ),
+                "kernel_abi": abi,
+                "module_count": len(
+                    entries
+                ),
+                "module_signer":
+                    family_signer,
+                "module_sig_key":
+                    family_sig_key,
+                "modules": entries,
+            },
+            indent=2,
+            sort_keys=True,
         )
+        + "\n"
+    )
 
-        panthor_archive = (
-            assets
-            / f"{pname}.tar.zst"
-        )
+    panthor_archive = (
+        assets
+        / f"{pname}.tar.zst"
+    )
 
-        tar_zst(
-            stage,
-            pname,
-            panthor_archive,
-        )
+    tar_zst(
+        stage,
+        pname,
+        panthor_archive,
+    )
 
-    release_assets = [boot, standalone, module_archive]
-    if panthor_archive:
-        release_assets.append(panthor_archive)
+    release_assets = [
+        boot,
+        standalone,
+        module_archive,
+        panthor_archive,
+    ]
 
     with (assets / "SHA256SUMS").open("w") as stream:
         for path in release_assets:
@@ -620,7 +779,7 @@ def main() -> int:
     print(f"vendor_dlkm modules: {carriers['vendor_dlkm']['module_count']}")
     print(f"system_dlkm modules: {carriers['system_dlkm']['module_count']}")
     print(f"Total modules:       {total}")
-    print(f"Panthor family:      {'4/4' if panthor_archive else 'not present'}")
+    print("Panthor family:      4/4 signed")
     print(f"Assets:              {assets}")
     print()
     print("NETWORK ACCESSED:     NO")

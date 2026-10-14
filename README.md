@@ -1,57 +1,88 @@
 # TreeForge Kernel
 
-Kernel provider for TreeForge on Pixel Tablet (tangorpro).
+Reproducible kernel build and release tooling for the Pixel Tablet (`tangorpro`).
 
 ## Target
 
-- Android 15
-- GS201 / arm64
-- Kernel base: android-15.0.0_r0.94
-- Canonical profile: treeforge-bootstrap
+    Device:             Pixel Tablet
+    Codename:           tangorpro
+    Architecture:       arm64
+    SoC:                Google GS201
+    Android baseline:   Android 15
+    Kernel base:        android-15.0.0_r0.94
+    Canonical profile:  treeforge-bootstrap
 
-The canonical profile supports Android Bootstrap and the kernel features required by TreeForge Alternate OS work.
+`VERSION` is authoritative for the TreeForge release identity.
 
 ## Build
 
-Run:
+`kernelctl` is the supported host interface.
 
     ./kernelctl setup
-    ./kernelctl build --profile treeforge-bootstrap
+    ./kernelctl build \
+        --profile treeforge-bootstrap \
+        --signing treeforge
 
 Use `./kernelctl --help` for the full command surface.
 
-## Provider
+Kernel builds do not flash the device.
 
-Kernel releases contain:
+## Source
 
-- boot.img
-- module-provider.json
-- module-provider archive
-- SHA256SUMS
-- matching Panthor module archive when available
+Google kernel source is pinned by the repository source locks. TreeForge changes are applied as tracked profile patches.
 
-Complete proprietary vendor_kernel_boot, vendor_dlkm, and system_dlkm images are not published.
+`treeforge-bootstrap` is the canonical combined profile for Android and ChromiumOS.
 
-Consumers start from the current local carrier, preserve all non-module content, replace only the provider module tree, regenerate module metadata, and apply Owner AVB locally.
+Panthor uses the Linux v7.0 Panthor 1.7 source as a tracked patch series. A second source tree is not vendored. Upstream identity and patch hashes are recorded in `provenance/upstream/linux-v7.0-panthor.json`.
 
-This includes preserving device files such as vendor_dlkm/etc/init.insmod.tangorpro.cfg.
+## Providers
 
-## Signing
+A release contains:
 
-Pixel Partitioner owns the TreeForge Owner AVB identity.
+    boot.img
+    module-provider.json
+    treeforge-kernel-modules-*.tar.zst
+    treeforge-kernel-panthor-*.tar.zst
+    SHA256SUMS
 
-Private keys are not stored in this repository.
+The Android module provider is one coherent `vendor_kernel_boot`, `vendor_dlkm`, and `system_dlkm` family.
+
+Each kernel generation preserves the matching signed four-module Panthor family. Releases never mix modules across kernel generations.
+
+Kernel module signatures belong to the kernel build. Pixel Partitioner preserves the `.ko` bytes exactly. Owner AVB does not re-sign kernel modules.
+
+Android carrier images are reconstructed from the current device. Non-module content is preserved, the provider module tree is replaced, module metadata is regenerated, and Owner AVB is applied locally.
+
+Proprietary carrier images are not release assets.
 
 ## Release
 
-VERSION is authoritative.
-
-Prepare a release:
+Prepare and verify local assets:
 
     ./release
 
-Publish an already verified release:
+Publish those exact prepared assets:
 
     ./release publish
 
-Experimental work stays on separate branches and is not part of normal releases.
+Publish does not rebuild or regenerate release assets. It requires a clean `main` matching `origin/main`.
+
+## Layout
+
+    kernelctl
+        Build and source controller.
+
+    profiles/
+        TreeForge kernel profiles and patches.
+
+    provenance/
+        Source locks and upstream provenance.
+
+    tools/treeforge/release/
+        Release packaging.
+
+    out/
+        Generated output.
+
+    .smoke/
+        Local audits.
