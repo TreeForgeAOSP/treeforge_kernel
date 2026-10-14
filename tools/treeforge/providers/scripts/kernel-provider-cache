@@ -33,18 +33,34 @@ def run(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     check: bool = True,
+    visible: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        args,
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
+    if visible:
+        result = subprocess.run(
+            args,
+            cwd=cwd,
+            env=env,
+            text=True,
+            check=False,
+        )
+    else:
+        result = subprocess.run(
+            args,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
 
     if check and result.returncode != 0:
+        if visible:
+            raise ProviderError(
+                f"command failed ({result.returncode}): "
+                f"{' '.join(args)}; see live output above"
+            )
+
         raise ProviderError(
             f"command failed ({result.returncode}): "
             f"{' '.join(args)}\n{result.stdout}"
@@ -337,6 +353,7 @@ def fetch_one(
                 "-c",
                 "protocol.version=2",
                 "fetch",
+                "--progress",
                 "--depth=1",
                 "--no-tags",
                 "origin",
@@ -344,6 +361,7 @@ def fetch_one(
             ],
             cwd=temporary,
             env=env,
+            visible=True,
         )
 
         run(
