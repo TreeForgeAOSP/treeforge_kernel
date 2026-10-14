@@ -5160,6 +5160,56 @@ def preserve_signed_panthor_family(
     return target
 
 
+def package_kernel_development_provider(
+    generation: Path,
+) -> Path:
+    helper = (
+        ROOT
+        / "tools"
+        / "treeforge"
+        / "providers"
+        / "kernel-development-provider"
+    )
+
+    need_file(helper)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(helper),
+            "--root",
+            str(ROOT),
+            "--generation",
+            str(generation),
+        ],
+        cwd=ROOT,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise KernelCtlError(
+            "kernel development-provider packaging "
+            "failed with exit code "
+            f"{result.returncode}"
+        )
+
+    current = (
+        ROOT
+        / "out"
+        / "development-provider"
+        / "current"
+    )
+
+    if not current.is_dir():
+        raise KernelCtlError(
+            "kernel development-provider current "
+            f"root missing: {current}"
+        )
+
+    return current
+
+
 def execute_kernel_build(
     signing: str,
     profile: str,
@@ -5282,6 +5332,10 @@ def execute_kernel_build(
         signing=signing,
     )
 
+    package_kernel_development_provider(
+        generation
+    )
+
     print()
     print("Kernel build complete")
     print("---------------------")
@@ -5333,6 +5387,26 @@ def build_command(argv) -> int:
     )
 
     parser.add_argument(
+        "--development-provider-only",
+        action="store_true",
+        help=(
+            "create/promote the local development provider "
+            "from a completed source generation without "
+            "starting a kernel build"
+        ),
+    )
+
+    parser.add_argument(
+        "--generation",
+        type=Path,
+        help=(
+            "completed out/source generation used only with "
+            "--development-provider-only; default: newest "
+            "completed packaged generation"
+        ),
+    )
+
+    parser.add_argument(
         "--profile",
         choices=BUILD_PROFILE_ORDER,
         help=(
@@ -5343,6 +5417,45 @@ def build_command(argv) -> int:
     )
 
     args = parser.parse_args(argv)
+
+    if (
+        args.generation is not None
+        and not args.development_provider_only
+    ):
+        parser.error(
+            "--generation requires "
+            "--development-provider-only"
+        )
+
+    if (
+        args.development_provider_only
+        and (
+            args.package_only
+            or args.plan_only
+        )
+    ):
+        parser.error(
+            "--development-provider-only cannot be combined "
+            "with --package-only or --plan-only"
+        )
+
+    if args.development_provider_only:
+        if args.generation is not None:
+            generation = (
+                args.generation
+                .expanduser()
+                .resolve()
+            )
+        else:
+            generation, _ = (
+                latest_source_generation()
+            )
+
+        package_kernel_development_provider(
+            generation
+        )
+
+        return 0
 
     profile = resolve_build_profile(
         args.profile
@@ -5378,6 +5491,10 @@ def build_command(argv) -> int:
             generation=generation,
             raw=raw,
             signing=args.signing,
+        )
+
+        package_kernel_development_provider(
+            generation
         )
 
         print()

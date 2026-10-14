@@ -1,0 +1,661 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+RETAIN_SUCCESSFUL_RUNS = 5
+SCHEMA = "treeforge.development-provider.v1"
+PROVIDER_ID = "kernel"
+
+
+class DevelopmentProviderError(RuntimeError):
+    pass
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+
+    with path.open("rb") as stream:
+        for block in iter(
+            lambda: stream.read(1024 * 1024),
+            b"",
+        ):
+            digest.update(block)
+
+    return digest.hexdigest()
+
+
+def need(path: Path) -> Path:
+    if not path.is_file():
+        raise DevelopmentProviderError(
+            f"required file missing: {path}"
+        )
+
+    return path
+
+
+def verify_provider(root: Path) -> dict:
+    manifest_path = (
+        root
+        / "development-provider.json"
+    )
+
+    try:
+        manifest = json.loads(
+            need(manifest_path).read_text(
+                encoding="utf-8"
+            )
+        )
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as error:
+        raise DevelopmentProviderError(
+            "development-provider.json is invalid"
+        ) from error
+
+    if (
+        manifest.get("schema") != SCHEMA
+        or manifest.get("provider") != PROVIDER_ID
+        or manifest.get("channel") != "development"
+        or manifest.get("release_eligible") is not False
+    ):
+        raise DevelopmentProviderError(
+            "development provider identity mismatch"
+        )
+
+    for name in (
+        "boot.img",
+        "module-provider.json",
+        "SHA256SUMS",
+    ):
+        need(root / name)
+
+    android_archives = sorted(
+        root.glob(
+            "treeforge-kernel-modules-"
+            "tangorpro-android15-*.tar.zst"
+        )
+    )
+
+    if len(android_archives) != 1:
+        raise DevelopmentProviderError(
+            "expected exactly one Android module "
+            "provider archive"
+        )
+
+    panthor_archives = sorted(
+        root.glob(
+            "treeforge-kernel-panthor-"
+            "tangorpro-android15-*.tar.zst"
+        )
+    )
+
+    if len(panthor_archives) != 1:
+        raise DevelopmentProviderError(
+            "expected exactly one Panthor provider archive"
+        )
+
+    checked = set()
+
+    for raw in (
+        root
+        / "SHA256SUMS"
+    ).read_text(
+        encoding="utf-8"
+    ).splitlines():
+        line = raw.strip()
+
+        if not line:
+            continue
+
+        try:
+            expected, name = line.split(
+                None,
+                1,
+            )
+        except ValueError as error:
+            raise DevelopmentProviderError(
+                f"invalid SHA256SUMS record: {line}"
+            ) from error
+
+        name = name.strip()
+
+        while name.startswith("*"):
+            name = name[1:]
+
+        target = root / name
+
+        need(target)
+
+        actual = sha256(target)
+
+        if actual != expected:
+            raise DevelopmentProviderError(
+                "provider checksum mismatch: "
+                f"{name}: {actual} != {expected}"
+            )
+
+        checked.add(name)
+
+    required = {
+        "boot.img",
+        "module-provider.json",
+        android_archives[0].name,
+        panthor_archives[0].name,
+    }
+
+    if checked != required:
+        raise DevelopmentProviderError(
+            "SHA256SUMS asset set mismatch: "
+            f"{sorted(checked)} != {sorted(required)}"
+        )
+
+    try:
+        module_provider = json.loads(
+            (
+                root
+                / "module-provider.json"
+            ).read_text(
+                encoding="utf-8"
+            )
+        )
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as error:
+        raise DevelopmentProviderError(
+            "module-provider.json is invalid"
+        ) from error
+
+    if (
+        module_provider.get("schema")
+        != "treeforge.kernel.module-provider.v2"
+        or module_provider.get("target")
+        != "tangorpro"
+        or module_provider.get("android_base")
+        != "android15"
+    ):
+        raise DevelopmentProviderError(
+            "kernel module-provider contract mismatch"
+        )
+
+    return manifest
+
+
+def update_current(
+    development_root: Path,
+    run: Path,
+) -> None:
+    current = (
+        development_root
+        / "current"
+    )
+
+    temporary = (
+        development_root
+        / ".current.tmp"
+    )
+
+    if (
+        temporary.exists()
+        or temporary.is_symlink()
+    ):
+        temporary.unlink()
+
+    temporary.symlink_to(
+        Path("runs") / run.name,
+        target_is_directory=True,
+    )
+
+    os.replace(
+        temporary,
+        current,
+    )
+
+
+def prune_runs(
+    runs_root: Path,
+    current_run: Path,
+) -> None:
+    runs = sorted(
+        (
+            path
+            for path in runs_root.iterdir()
+            if path.is_dir()
+        ),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+
+    keep = [current_run]
+
+    for path in runs:
+        if path == current_run:
+            continue
+
+        if (
+            len(keep)
+            >= RETAIN_SUCCESSFUL_RUNS
+        ):
+            break
+
+        keep.append(path)
+
+    keep_resolved = {
+        path.resolve()
+        for path in keep
+    }
+
+    for path in runs:
+        if (
+            path.resolve()
+            in keep_resolved
+        ):
+            continue
+
+        print(
+            "Pruning development provider run: "
+            f"{path}"
+        )
+
+        shutil.rmtree(path)
+
+
+def package(
+    root: Path,
+    generation: Path,
+) -> Path:
+    root = (
+        root
+        .expanduser()
+        .resolve()
+    )
+
+    generation = (
+        generation
+        .expanduser()
+        .resolve()
+    )
+
+    source_root = (
+        root
+        / "out"
+        / "source"
+    ).resolve()
+
+    if source_root not in generation.parents:
+        raise DevelopmentProviderError(
+            "generation is outside canonical "
+            f"source root: {generation}"
+        )
+
+    if not generation.is_dir():
+        raise DevelopmentProviderError(
+            f"generation missing: {generation}"
+        )
+
+    package_root = (
+        generation
+        / "package"
+    )
+
+    for name in (
+        "boot.img",
+        "vendor_kernel_boot.img",
+        "vendor_dlkm.img",
+        "system_dlkm.img",
+    ):
+        need(
+            package_root
+            / name
+        )
+
+    version = need(
+        root
+        / "VERSION"
+    ).read_text(
+        encoding="utf-8"
+    ).strip()
+
+    if not version:
+        raise DevelopmentProviderError(
+            "VERSION is empty"
+        )
+
+    build_json = (
+        generation
+        / "metadata"
+        / "build.json"
+    )
+
+    development_root = (
+        root
+        / "out"
+        / "development-provider"
+    )
+
+    runs_root = (
+        development_root
+        / "runs"
+    )
+
+    incoming_root = (
+        development_root
+        / ".incoming"
+    )
+
+    run_id = generation.name
+
+    staged = (
+        incoming_root
+        / run_id
+    )
+
+    final = (
+        runs_root
+        / run_id
+    )
+
+    development_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    runs_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    incoming_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    if final.is_dir():
+        verify_provider(
+            final
+        )
+
+        update_current(
+            development_root,
+            final,
+        )
+
+        prune_runs(
+            runs_root,
+            final,
+        )
+
+        print(
+            "TreeForge Kernel Development Provider"
+        )
+        print(
+            "====================================="
+        )
+        print()
+        print(f"Run:      {final}")
+        print(
+            "Current:  "
+            f"{development_root / 'current'}"
+        )
+        print("Reused:   YES")
+        print(
+            "TREEFORGE_KERNEL_"
+            "DEVELOPMENT_PROVIDER=PASS"
+        )
+
+        return final
+
+    if staged.exists():
+        shutil.rmtree(
+            staged
+        )
+
+    staged.mkdir(
+        parents=True,
+    )
+
+    temporary_package = (
+        staged
+        / ".release-package"
+    )
+
+    helper = need(
+        root
+        / "tools"
+        / "treeforge"
+        / "release"
+        / "kernel-release-package"
+    )
+
+    command = [
+        sys.executable,
+        str(helper),
+        "--root",
+        str(root),
+        "--version",
+        version,
+        "--generation",
+        str(generation),
+        "--output",
+        str(temporary_package),
+        "--force",
+    ]
+
+    print(
+        "Building local development provider "
+        "from completed generation"
+    )
+
+    print(
+        " ".join(command)
+    )
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=root,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            raise DevelopmentProviderError(
+                "kernel provider packaging failed "
+                f"with exit code {result.returncode}"
+            )
+
+        assets = (
+            temporary_package
+            / "assets"
+        )
+
+        if not assets.is_dir():
+            raise DevelopmentProviderError(
+                "kernel provider assets missing"
+            )
+
+        for source in sorted(
+            assets.iterdir()
+        ):
+            if not source.is_file():
+                raise DevelopmentProviderError(
+                    "unexpected non-file release asset: "
+                    f"{source}"
+                )
+
+            shutil.copy2(
+                source,
+                staged / source.name,
+            )
+
+        shutil.rmtree(
+            temporary_package
+        )
+
+        manifest = {
+            "schema":
+                SCHEMA,
+
+            "provider":
+                PROVIDER_ID,
+
+            "repository":
+                "TreeForgeAOSP/treeforge_kernel",
+
+            "channel":
+                "development",
+
+            "release_eligible":
+                False,
+
+            "version":
+                version,
+
+            "run_id":
+                run_id,
+
+            "source_generation":
+                str(generation),
+
+            "retention_successful_runs":
+                RETAIN_SUCCESSFUL_RUNS,
+
+            "build_metadata": (
+                {
+                    "path":
+                        str(
+                            build_json.relative_to(
+                                generation
+                            )
+                        ),
+
+                    "sha256":
+                        sha256(
+                            build_json
+                        ),
+                }
+                if build_json.is_file()
+                else None
+            ),
+        }
+
+        (
+            staged
+            / "development-provider.json"
+        ).write_text(
+            json.dumps(
+                manifest,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        verify_provider(
+            staged
+        )
+
+        staged.replace(
+            final
+        )
+
+    except Exception:
+        if staged.exists():
+            shutil.rmtree(
+                staged
+            )
+
+        raise
+
+    update_current(
+        development_root,
+        final,
+    )
+
+    prune_runs(
+        runs_root,
+        final,
+    )
+
+    print()
+    print(
+        "TreeForge Kernel Development Provider"
+    )
+    print(
+        "====================================="
+    )
+    print()
+    print(f"Run:      {final}")
+    print(
+        "Current:  "
+        f"{development_root / 'current'}"
+    )
+    print(
+        "Retained: "
+        f"{RETAIN_SUCCESSFUL_RUNS}"
+    )
+    print("CHANNEL=development")
+    print("RELEASE_ELIGIBLE=NO")
+    print(
+        "TREEFORGE_KERNEL_"
+        "DEVELOPMENT_PROVIDER=PASS"
+    )
+
+    return final
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Create the TreeForge Kernel local "
+            "development-provider run"
+        )
+    )
+
+    parser.add_argument(
+        "--root",
+        type=Path,
+        required=True,
+    )
+
+    parser.add_argument(
+        "--generation",
+        type=Path,
+        required=True,
+    )
+
+    args = parser.parse_args()
+
+    package(
+        args.root,
+        args.generation,
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(
+            main()
+        )
+    except DevelopmentProviderError as error:
+        print(
+            f"\nERROR: {error}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)

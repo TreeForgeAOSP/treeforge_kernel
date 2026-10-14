@@ -86,3 +86,15 @@ Publish does not rebuild or regenerate release assets. It requires a clean `main
 
     .smoke/
         Local audits.
+
+## Development provider
+
+Successful kernel builds automatically publish a local development provider at `out/development-provider/current`. Successful runs are retained under `out/development-provider/runs/`, with the newest five kept.
+
+The development provider contains the exact packaged `boot.img`, Android module provider, signed Panthor provider, metadata, and checksums from one completed source generation. Failed builds do not advance `current`.
+
+To promote an already completed packaged generation without rebuilding:
+
+    ./kernelctl build --development-provider-only --generation /absolute/path/to/out/source/<generation>
+
+Development-provider output is local-only and release-ineligible. Production release assets are created separately through the explicit release workflow from an accepted generation.
