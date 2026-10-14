@@ -1,0 +1,298 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(
+    cd "$(dirname "${BASH_SOURCE[0]}")"
+    pwd
+)"
+
+cd "$ROOT"
+
+VERSION_FILE="$ROOT/VERSION"
+
+if [ ! -f "$VERSION_FILE" ]; then
+    echo "ERROR: VERSION missing" >&2
+    exit 1
+fi
+
+VERSION="$(
+    tr -d '[:space:]' < "$VERSION_FILE"
+)"
+
+if [ -z "$VERSION" ]; then
+    echo "ERROR: VERSION is empty" >&2
+    exit 1
+fi
+
+MODE="${1:-prepare}"
+
+case "$MODE" in
+    prepare|publish)
+        ;;
+    *)
+        echo "Usage: ./release [prepare|publish]" >&2
+        exit 2
+        ;;
+esac
+
+find_generation() {
+    python3 - "$ROOT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+source = root / "out" / "source"
+
+if not source.is_dir():
+    raise SystemExit(
+        "no out/source directory; build treeforge-bootstrap first"
+    )
+
+accepted = []
+
+for generation in source.iterdir():
+    if not generation.is_dir():
+        continue
+
+    package = generation / "package"
+
+    required = (
+        package / "boot.img",
+        package / "vendor_kernel_boot.img",
+        package / "vendor_dlkm.img",
+        package / "system_dlkm.img",
+    )
+
+    if not all(path.is_file() for path in required):
+        continue
+
+    metadata = generation / "metadata" / "build.json"
+
+    if metadata.is_file():
+        try:
+            data = json.loads(
+                metadata.read_text(encoding="utf-8")
+            )
+        except Exception:
+            continue
+
+        if data.get("build_profile") != "treeforge-bootstrap":
+            continue
+
+    accepted.append(generation)
+
+if not accepted:
+    raise SystemExit(
+        "no completed treeforge-bootstrap generation found"
+    )
+
+accepted.sort(
+    key=lambda path: (
+        path.stat().st_mtime_ns,
+        path.name,
+    )
+)
+
+print(accepted[-1])
+PY
+}
+
+GENERATION="$(find_generation)"
+
+echo "TreeForge Kernel release"
+echo "========================"
+echo "Version:    $VERSION"
+echo "Generation: $GENERATION"
+echo
+
+./kernelctl release \
+    --version "$VERSION" \
+    --generation "$GENERATION"
+
+ASSETS="$ROOT/out/releases/$VERSION/assets"
+
+for name in \
+    boot.img \
+    module-provider.json \
+    SHA256SUMS
+do
+    if [ ! -f "$ASSETS/$name" ]; then
+        echo "ERROR: missing release asset: $name" >&2
+        exit 1
+    fi
+done
+
+mapfile -t MODULE_ARCHIVES < <(
+    find "$ASSETS" \
+        -maxdepth 1 \
+        -type f \
+        -name 'treeforge-kernel-modules-*.tar.zst' \
+        -print
+)
+
+if [ "${#MODULE_ARCHIVES[@]}" -ne 1 ]; then
+    echo "ERROR: expected exactly one module archive" >&2
+    exit 1
+fi
+
+(
+    cd "$ASSETS"
+    sha256sum -c SHA256SUMS
+)
+
+python3 - \
+    "$ASSETS/module-provider.json" \
+    "$VERSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+version = sys.argv[2]
+
+data = json.loads(
+    path.read_text(encoding="utf-8")
+)
+
+assert (
+    data["schema"]
+    == "treeforge.kernel.module-provider.v2"
+)
+
+assert data["release"] == version
+
+recon = data["reconstruction"]
+
+assert recon["carrier_source"] == "current-installed"
+assert recon["carrier_policy"] == "patch-current"
+assert recon["non_module_payload"] == "preserve-exact"
+assert recon["module_tree_policy"] == "replace-exact"
+assert recon["regenerate_module_metadata"] is True
+assert recon["partition_images_distributed"] is False
+
+for carrier in (
+    "vendor_kernel_boot",
+    "vendor_dlkm",
+    "system_dlkm",
+):
+    policy = recon["carriers"][carrier]
+
+    assert (
+        policy["non_module_payload"]
+        == "preserve-exact"
+    )
+
+    assert (
+        policy["module_tree_policy"]
+        == "replace-exact"
+    )
+
+print("PROVIDER_CONTRACT=PASS")
+PY
+
+grep -q \
+    'VERSION is authoritative.' \
+    README.md
+
+grep -q \
+    'preserve all non-module content' \
+    README.md
+
+echo "README_CONTRACT=PASS"
+echo "CHECKSUMS=PASS"
+
+if [ "$MODE" = "prepare" ]; then
+    echo
+    echo "RELEASE_PREPARE=PASS"
+    echo "ASSETS=$ASSETS"
+    exit 0
+fi
+
+echo
+echo "Publishing $VERSION"
+echo "-------------------"
+
+if [ -n "$(git status --porcelain)" ]; then
+    echo "ERROR: publish requires a clean worktree" >&2
+    exit 1
+fi
+
+if [ "$(git branch --show-current)" != "main" ]; then
+    echo "ERROR: publish requires main" >&2
+    exit 1
+fi
+
+git fetch origin main --tags
+
+if ! git diff --quiet HEAD origin/main; then
+    echo "ERROR: local main differs from origin/main" >&2
+    exit 1
+fi
+
+if git rev-parse "$VERSION" >/dev/null 2>&1; then
+    echo "ERROR: local tag exists: $VERSION" >&2
+    exit 1
+fi
+
+if git ls-remote \
+    --exit-code \
+    --tags origin \
+    "refs/tags/$VERSION" \
+    >/dev/null 2>&1
+then
+    echo "ERROR: remote tag exists: $VERSION" >&2
+    exit 1
+fi
+
+if gh release view \
+    "$VERSION" \
+    --repo TreeForgeAOSP/treeforge_kernel \
+    >/dev/null 2>&1
+then
+    echo "ERROR: GitHub release exists: $VERSION" >&2
+    exit 1
+fi
+
+NOTES="$ROOT/out/releases/$VERSION/RELEASE_NOTES.md"
+
+cat > "$NOTES" <<NOTES
+# TreeForge Kernel $VERSION
+
+Pixel Tablet (tangorpro), Android 15.
+
+- Kernel and coherent module provider.
+- Local proprietary carriers are preserved.
+- Provider module trees are replaced.
+- Module metadata is regenerated.
+- Owner AVB is applied locally.
+NOTES
+
+git tag -a \
+    "$VERSION" \
+    -m "TreeForge Kernel $VERSION"
+
+git push origin main
+git push origin "$VERSION"
+
+mapfile -t UPLOADS < <(
+    find "$ASSETS" \
+        -maxdepth 1 \
+        -type f \
+        -print |
+    sort
+)
+
+gh release create \
+    "$VERSION" \
+    "${UPLOADS[@]}" \
+    --repo TreeForgeAOSP/treeforge_kernel \
+    --title "TreeForge Kernel $VERSION" \
+    --notes-file "$NOTES"
+
+gh release view \
+    "$VERSION" \
+    --repo TreeForgeAOSP/treeforge_kernel
+
+echo
+echo "RELEASE_PUBLISH=PASS"

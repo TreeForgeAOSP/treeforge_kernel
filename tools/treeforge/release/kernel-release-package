@@ -237,14 +237,32 @@ def main() -> int:
         description="Create local TreeForge kernel release assets only."
     )
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--version", required=True)
+    parser.add_argument("--version")
     parser.add_argument("--generation", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
     root = args.root.expanduser().resolve()
-    version = version_value(args.version)
+
+    repository_version = version_value(
+        need(root / "VERSION")
+        .read_text(encoding="utf-8")
+        .strip()
+    )
+
+    version = (
+        version_value(args.version)
+        if args.version
+        else repository_version
+    )
+
+    if version != repository_version:
+        raise ReleaseError(
+            "release version does not match VERSION: "
+            f"{version!r} != {repository_version!r}"
+        )
+
     generation = (
         args.generation.expanduser().resolve()
         if args.generation else latest_generation(root)
@@ -385,7 +403,7 @@ def main() -> int:
     abi = next(iter(all_abis))
 
     manifest = {
-        "schema": "treeforge.kernel.module-provider.v1",
+        "schema": "treeforge.kernel.module-provider.v2",
         "release": version,
         "target": "tangorpro",
         "android_base": "android15",
@@ -397,16 +415,30 @@ def main() -> int:
         "supported_baseline": baseline["supported_baseline"],
         "module_count": total,
         "reconstruction": {
-            "module_tree_policy": "replace_exact",
+            "carrier_source": "current-installed",
+            "carrier_policy": "patch-current",
+            "non_module_payload": "preserve-exact",
+            "module_tree_policy": "replace-exact",
             "regenerate_module_metadata": True,
             "partition_images_distributed": False,
             "owner_avb": "local-device-owner-resign",
-            "vendor_kernel_boot": {
-                "source": "current-installed",
-                "image_structure": "preserve",
-                "module_tree_policy": "replace_exact",
-                "ramdisk_compression": "lz4",
-                "rebuild": True,
+            "carriers": {
+                "vendor_kernel_boot": {
+                    "image_structure": "preserve",
+                    "non_module_payload": "preserve-exact",
+                    "module_tree_policy": "replace-exact",
+                    "ramdisk_compression": "lz4",
+                },
+                "vendor_dlkm": {
+                    "filesystem_structure": "preserve",
+                    "non_module_payload": "preserve-exact",
+                    "module_tree_policy": "replace-exact",
+                },
+                "system_dlkm": {
+                    "filesystem_structure": "preserve",
+                    "non_module_payload": "preserve-exact",
+                    "module_tree_policy": "replace-exact",
+                },
             },
         },
         "carriers": carriers,
@@ -430,8 +462,10 @@ def main() -> int:
         f"Release: {version}\n"
         "Target: Pixel Tablet (tangorpro)\n"
         f"Kernel ABI: {abi}\n\n"
-        "This is a provider, not a flashable partition image. "
-        "Consumers reconstruct the kernel family locally and owner-sign it.\n"
+        "This is a provider, not a flashable carrier image. "
+        "Patch the current local carriers, preserve non-module payload, "
+        "replace the provider module trees, regenerate module metadata, "
+        "then apply Owner AVB locally.\n"
     )
 
     standalone = assets / "module-provider.json"
