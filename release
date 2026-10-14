@@ -25,15 +25,35 @@ if [ -z "$VERSION" ]; then
 fi
 
 MODE="${1:-prepare}"
+FORCE=0
 
 case "$MODE" in
-    prepare|publish)
+    prepare)
+        shift || true
+
+        if [ "${1:-}" = "--force" ]; then
+            FORCE=1
+            shift
+        fi
+        ;;
+    publish)
+        shift || true
+
+        if [ "${1:-}" = "--force" ]; then
+            echo "ERROR: --force is only valid with prepare" >&2
+            exit 2
+        fi
         ;;
     *)
-        echo "Usage: ./release [prepare|publish]" >&2
+        echo "Usage: ./release [prepare [--force]|publish]" >&2
         exit 2
         ;;
 esac
+
+if [ "$#" -ne 0 ]; then
+    echo "Usage: ./release [prepare [--force]|publish]" >&2
+    exit 2
+fi
 
 find_generation() {
     python3 - "$ROOT" <<'PY'
@@ -119,9 +139,17 @@ if [ "$MODE" = "prepare" ]; then
     echo "Generation: $GENERATION"
     echo
 
-    ./kernelctl release \
-        --version "$VERSION" \
+    RELEASE_ARGS=(
+        release
+        --version "$VERSION"
         --generation "$GENERATION"
+    )
+
+    if [ "$FORCE" -eq 1 ]; then
+        RELEASE_ARGS+=(--force)
+    fi
+
+    ./kernelctl "${RELEASE_ARGS[@]}"
 else
     echo "Mode:       publish prepared assets"
     echo
@@ -228,11 +256,11 @@ print("PROVIDER_CONTRACT=PASS")
 PY
 
 grep -q \
-    'VERSION is authoritative.' \
+    'authoritative for the TreeForge release identity' \
     README.md
 
 grep -q \
-    'preserve all non-module content' \
+    'Non-module content is preserved' \
     README.md
 
 grep -q \
