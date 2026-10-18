@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# TreeForge repository-local release/publishing workflow (normalized).
+# Component-specific ./release prepare continues to use the original lifecycle.
+if [[ $# -eq 0 || "${1:-}" == "publish" || "${1:-}" == "verify" || "${1:-}" == "status" || "${1:-}" == "resume" ]]; then
+    _tf_release_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    exec python3 "$_tf_release_root/scripts/treeforge_release_workflow.py" "$@"
+fi
 set -euo pipefail
 
 ROOT="$(
@@ -280,91 +286,3 @@ if [ "$MODE" = "prepare" ]; then
     echo "ASSETS=$ASSETS"
     exit 0
 fi
-
-echo
-echo "Publishing $VERSION"
-echo "-------------------"
-
-if [ -n "$(git status --porcelain)" ]; then
-    echo "ERROR: publish requires a clean worktree" >&2
-    exit 1
-fi
-
-if [ "$(git branch --show-current)" != "main" ]; then
-    echo "ERROR: publish requires main" >&2
-    exit 1
-fi
-
-git fetch origin main --tags
-
-if ! git diff --quiet HEAD origin/main; then
-    echo "ERROR: local main differs from origin/main" >&2
-    exit 1
-fi
-
-if git rev-parse "$VERSION" >/dev/null 2>&1; then
-    echo "ERROR: local tag exists: $VERSION" >&2
-    exit 1
-fi
-
-if git ls-remote \
-    --exit-code \
-    --tags origin \
-    "refs/tags/$VERSION" \
-    >/dev/null 2>&1
-then
-    echo "ERROR: remote tag exists: $VERSION" >&2
-    exit 1
-fi
-
-if gh release view \
-    "$VERSION" \
-    --repo TreeForgeAOSP/treeforge_kernel \
-    >/dev/null 2>&1
-then
-    echo "ERROR: GitHub release exists: $VERSION" >&2
-    exit 1
-fi
-
-NOTES="$ROOT/out/releases/$VERSION/RELEASE_NOTES.md"
-
-cat > "$NOTES" <<NOTES
-# TreeForge Kernel $VERSION
-
-Pixel Tablet (tangorpro), Android 15.
-
-- Unified Android and ChromiumOS kernel.
-- Coherent Android kernel-module provider.
-- Matching signed Panthor 1.7 provider.
-- Proprietary carrier content is preserved and reconstructed locally.
-- Owner AVB is applied locally by Pixel Partitioner.
-NOTES
-
-git tag -a \
-    "$VERSION" \
-    -m "TreeForge Kernel $VERSION"
-
-git push origin main
-git push origin "$VERSION"
-
-mapfile -t UPLOADS < <(
-    find "$ASSETS" \
-        -maxdepth 1 \
-        -type f \
-        -print |
-    sort
-)
-
-gh release create \
-    "$VERSION" \
-    "${UPLOADS[@]}" \
-    --repo TreeForgeAOSP/treeforge_kernel \
-    --title "TreeForge Kernel $VERSION" \
-    --notes-file "$NOTES"
-
-gh release view \
-    "$VERSION" \
-    --repo TreeForgeAOSP/treeforge_kernel
-
-echo
-echo "RELEASE_PUBLISH=PASS"
