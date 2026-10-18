@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # TreeForge repository-local release/publishing workflow (normalized).
 # Component-specific ./release prepare continues to use the original lifecycle.
-if [[ $# -eq 0 || "${1:-}" == "publish" || "${1:-}" == "verify" || "${1:-}" == "status" || "${1:-}" == "resume" ]]; then
+if [[ $# -eq 0 || "${1:-}" == "publish" || "${1:-}" == "verify" || "${1:-}" == "status" || "${1:-}" == "resume" || "${1:-}" == "contract" ]]; then
     _tf_release_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
     exec python3 "$_tf_release_root/scripts/treeforge_release_workflow.py" "$@"
 fi

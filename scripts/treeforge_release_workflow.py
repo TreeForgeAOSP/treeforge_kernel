@@ -131,20 +131,36 @@ def suggest_next(v: str) -> str:
     return f'v{major}.{minor}.1'
 
 
+def version_order(version: str) -> tuple[int, int, int, int, int]:
+    normal = normalize(version)
+    match = re.fullmatch(r'v(\d+)\.(\d+)(?:\.(\d+))?(?:b(\d+))?', normal)
+    require(match is not None, f'invalid semantic version: {version}')
+    major, minor, patch, beta = match.groups()
+    # A beta of an equivalent version sorts *before* the stable release.
+    return int(major), int(minor), int(patch or 0), int(beta is None), int(beta or 0)
+
+
 def stamp() -> str:
     return datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%SZ')
 
 
+def expected_release_branch() -> str:
+    # Pixel Partitioner is developed/released from its authoritative development branch.
+    # Every other currently normalized TreeForge repository uses main.
+    return 'development' if REPO == 'pixel_partitioner' else 'main'
+
+
 def verify_clean_main_and_remote() -> str:
-    require(git('branch', '--show-current') == 'main', 'release requires main branch')
+    branch = expected_release_branch()
+    require(git('branch', '--show-current') == branch, f'release requires {branch} branch')
     require(not git('status', '--porcelain=v1', '--untracked-files=all'), 'worktree must be clean')
     slug = SLUGS[REPO]
     require(git('remote', 'get-url', 'origin') == f'git@github.com:{slug}.git', 'origin SSH slug mismatch')
     require(not cmd(['git', 'config', '--get', 'core.sshCommand'], check=False).stdout.strip(),
             'git core.sshCommand override not allowed')
-    cmd(['git', 'fetch', 'origin', 'main'])
+    cmd(['git', 'fetch', 'origin', branch])
     head = git('rev-parse', 'HEAD')
-    require(head == git('rev-parse', 'origin/main'), 'HEAD does not equal origin/main')
+    require(head == git('rev-parse', f'origin/{branch}'), f'HEAD does not equal origin/{branch}')
     return head
 
 
@@ -262,30 +278,45 @@ def update_next_version(published_tag: str) -> None:
         print('NEXT_VERSION=DEFERRED; published release remains valid')
         return
     next_body = normalize(answer or suggest)
-    require(next_body != current_body, 'next version must differ from published version')
+    require(version_order(next_body) > version_order(current_body),
+            f'next development version {next_body} must be newer than published {current_body}')
     next_version = component_version(next_body)
     raw = version_file().read_text()
-    published, _ = version_info()
     if REPO == 'treeforge_bootstrap':
-        changed = re.sub(r'(?m)^TREEFORGE_BOOTSTRAP_VERSION=\S+$', f'TREEFORGE_BOOTSTRAP_VERSION={next_version}', raw, count=1)
+        changed = re.sub(r'(?m)^TREEFORGE_BOOTSTRAP_VERSION=\S+$',
+                         f'TREEFORGE_BOOTSTRAP_VERSION={next_version}', raw, count=1)
     elif REPO == 'treeforge_bootstrap_menu':
-        changed = re.sub(r'(?m)^TREEFORGE_BOOT_MENU_VERSION=\S+$', f'TREEFORGE_BOOT_MENU_VERSION={next_version}', raw)
-        changed = re.sub(r'(?m)^TREEFORGE_BOOT_MANAGER_VERSION=\S+$', f'TREEFORGE_BOOT_MANAGER_VERSION={next_version}', changed)
+        changed = re.sub(r'(?m)^TREEFORGE_BOOT_MENU_VERSION=\S+$',
+                         f'TREEFORGE_BOOT_MENU_VERSION={next_version}', raw)
+        changed = re.sub(r'(?m)^TREEFORGE_BOOT_MANAGER_VERSION=\S+$',
+                         f'TREEFORGE_BOOT_MANAGER_VERSION={next_version}', changed)
     else:
         changed = next_version + '\n'
     require(changed != raw, 'VERSION not changed')
-    require(not git('status', '--porcelain=v1', '--untracked-files=all'), 'post-publish worktree is not clean')
-    version_file().write_text(changed)
+    require(not git('status', '--porcelain=v1', '--untracked-files=all'),
+            'post-publish worktree is not clean')
+    originals: dict[Path, str] = {version_file(): raw}
     files = ['VERSION']
     if REPO == 'treeforge_manager':
         code = ROOT / 'ANDROID_VERSION_CODE'
-        code.write_text(f'{int(code.read_text().strip()) + 1}\n')
+        code_raw = code.read_text()
+        require(code_raw.strip().isdigit(), 'invalid Android VERSION_CODE')
+        originals[code] = code_raw
         files.append('ANDROID_VERSION_CODE')
-    git('add', '--', *files)
     try:
-        git('commit', '-m', f'Start {next_version} development after {published_tag}')
+        version_file().write_text(changed)
+        if REPO == 'treeforge_manager':
+            code.write_text(f'{int(originals[code].strip()) + 1}\n')
+        git('add', '--', *files)
+        # Do not permit repository-local hooks to rebuild during a release.
+        cmd(['git', '-c', 'core.hooksPath=/dev/null', 'commit', '-m',
+             f'Start {next_version} development after {published_tag}'])
     except Exception as exc:
-        raise Refusal(f'release published but VERSION commit failed: {exc}') from exc
+        # No remote rollback or tag deletion; restore only the local pending files.
+        for path, contents in originals.items():
+            path.write_text(contents)
+        cmd(['git', 'reset', '--quiet', 'HEAD', '--', *files], check=False)
+        raise Refusal(f'release published but VERSION commit failed (local files restored): {exc}') from exc
     print(f'NEXT_DEVELOPMENT_VERSION={next_version}')
     print('NEXT_VERSION_COMMIT=LOCAL_ONLY (not pushed)')
 
@@ -402,6 +433,43 @@ def resume(tag: str) -> None:
     update_next_version(tag)
 
 
+def contract_readonly() -> None:
+    built, _ = version_info()
+    head = git('rev-parse', 'HEAD')
+    branch = git('branch', '--show-current')
+    clean = not git('status', '--porcelain=v1', '--untracked-files=all')
+    print(f'REPOSITORY={SLUGS[REPO]}')
+    print(f'SOURCE_BRANCH={branch}')
+    print(f'EXPECTED_RELEASE_BRANCH={expected_release_branch()}')
+    print(f'SOURCE_COMMIT={head}')
+    print(f'SOURCE_CLEAN={str(clean).upper()}')
+    print(f'COMPONENT_VERSION={built}')
+    if REPO == 'treeforge_kernel':
+        print('ACCEPTED_PROVIDER_CONTRACT=KERNEL_GENERATION_LIFECYCLE; no current development-provider record')
+        return
+    base = ROOT / 'out' / ('development-artifact' if REPO == 'treeforge_manager' else 'development-provider') / 'current'
+    metadata = base / ('development-artifact.json' if REPO == 'treeforge_manager' else 'development-provider.json')
+    if not metadata.is_file():
+        print('ACCEPTED_PROVIDER_CONTRACT=NO_CURRENT_METADATA')
+        return
+    try:
+        doc = json.loads(metadata.read_text())
+    except (ValueError, OSError) as exc:
+        print(f'ACCEPTED_PROVIDER_CONTRACT=INVALID_METADATA:{exc}')
+        return
+    provider_commit = doc.get('source_commit')
+    provider_version = doc.get('version')
+    print(f'ACCEPTED_PROVIDER_SOURCE_COMMIT={provider_commit}')
+    print(f'ACCEPTED_PROVIDER_VERSION={provider_version}')
+    print(f'ACCEPTED_PROVIDER_SOURCE_CLEAN={doc.get("source_dirty") is False}')
+    print('ACCEPTED_PROVIDER_MATCHES_CURRENT_HEAD=' + str(provider_commit == head).upper())
+    print('ACCEPTED_PROVIDER_MATCHES_CURRENT_VERSION=' + str(provider_version == built).upper())
+    if provider_commit != head:
+        print('RELEASE_CONTRACT=HISTORICAL_ACCEPTED_PROVIDER; no provenance bypass authorized')
+    else:
+        print('RELEASE_CONTRACT=SOURCE_COMMIT_ALIGNED; downstream validation still required')
+
+
 def main(argv: list[str]) -> int:
     require(REPO in SLUGS, f'unrecognized repository: {REPO}')
     subcommand = argv[0] if argv else 'publish'
@@ -417,6 +485,10 @@ def main(argv: list[str]) -> int:
         require(len(argv) <= 1, 'usage: ./release [publish]')
         publish()
         return 0
+    if subcommand == 'contract':
+        require(len(argv) == 1, 'usage: ./release contract')
+        contract_readonly()
+        return 0
     if subcommand == 'verify':
         built, _ = version_info()
         require(len(argv) <= 1, 'usage: ./release verify')
@@ -427,7 +499,7 @@ def main(argv: list[str]) -> int:
         require(len(argv) == 2, 'usage: ./release resume VERSION')
         resume(component_version(normalize(argv[1])))
         return 0
-    raise Refusal('usage: ./release [prepare [--force] | verify | publish | status | resume VERSION]')
+    raise Refusal('usage: ./release [prepare [--force] | verify | publish | status | contract | resume VERSION]')
 
 
 if __name__ == '__main__':

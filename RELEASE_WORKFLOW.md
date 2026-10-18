@@ -3,7 +3,7 @@
 Run `./release` for interactive publishing. `./release prepare [--force]`
 retains this repository's original component-specific lifecycle and remains
 non-building; `./release verify` checks staged checksums; `./release status`
-shows local identity; `./release resume VERSION` can finish the post-publish
+shows local identity; `./release contract` diagnoses the current accepted provider without rebuilding; `./release resume VERSION` can finish the post-publish
 version prompt if a verified publication receipt exists.
 
 The publisher **never rebuilds or renames** accepted artifacts. It asks for
