@@ -319,6 +319,23 @@ def update_next_version(published_tag: str) -> None:
         raise Refusal(f'release published but VERSION commit failed (local files restored): {exc}') from exc
     print(f'NEXT_DEVELOPMENT_VERSION={next_version}')
     print('NEXT_VERSION_COMMIT=LOCAL_ONLY (not pushed)')
+    # Only offer branch synchronization AFTER publication is verified and
+    # the next-development-version commit has succeeded. No tags are pushed here.
+    choice = input(f'Push next development commit to origin/{expected_release_branch()}? [Y/n]: ').strip().lower()
+    if choice not in ('', 'y', 'yes'):
+        print('NEXT_VERSION_PUSH=DEFERRED; local commit preserved')
+        return
+    check_owner()
+    branch = expected_release_branch()
+    require(git('branch', '--show-current') == branch, 'branch changed after version commit')
+    require(not git('status', '--porcelain=v1', '--untracked-files=all'), 'worktree changed after version commit')
+    require(git('remote', 'get-url', 'origin') == f'git@github.com:{SLUGS[REPO]}.git',
+            'unexpected remote; local commit preserved')
+    cmd(['git', 'fetch', 'origin', branch])
+    require(cmd(['git', 'merge-base', '--is-ancestor', f'origin/{branch}', 'HEAD'], check=False).returncode == 0,
+            'remote branch diverged; local commit preserved')
+    cmd(['git', 'push', 'origin', f'HEAD:refs/heads/{branch}'])
+    print(f'NEXT_VERSION_PUSH=PASS:{branch}')
 
 
 def publication_receipt_path(tag: str) -> Path:
@@ -385,10 +402,9 @@ def publish() -> None:
     uploaded = files + [manifest]
     print(f'RELEASE_CHANNEL={channel}; GITHUB_PRERELEASE={str(channel=="prerelease").lower()}')
     print(f'RELEASE_NOTES={notes}')
-    # Extra authorization at the last possible point.
-    expected = f'PUBLISH {SLUGS[REPO]} {tag}'
-    answer = input(f'Type exactly "{expected}" to publish: ')
-    require(answer == expected, 'publication cancelled; no GitHub mutations')
+    # Interactive authorization at the last possible point.
+    answer = input('Publish? [Y/n]: ').strip().lower()
+    require(answer in ('', 'y', 'yes'), 'publication cancelled; no GitHub mutations')
     # Revalidate source and remote state after the interactive authorization.
     require(git('rev-parse', 'HEAD') == head and not git('status', '--porcelain=v1', '--untracked-files=all'),
             'source changed before publication')
