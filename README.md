@@ -1,100 +1,36 @@
 # TreeForge Kernel
 
-Reproducible kernel build and release tooling for the Pixel Tablet (`tangorpro`).
+Reproducible kernel and signed-module provider for Pixel Tablet (`tangorpro`, GS201, arm64), based on Android 15 kernel `android-15.0.0_r0.94`.
 
-## Target
-
-    Device:             Pixel Tablet
-    Codename:           tangorpro
-    Architecture:       arm64
-    SoC:                Google GS201
-    Android baseline:   Android 15
-    Kernel base:        android-15.0.0_r0.94
-    Canonical profile:  treeforge-bootstrap
-
-`VERSION` is authoritative for the TreeForge release identity.
+`VERSION` is authoritative for the TreeForge release identity. The canonical Android/ChromiumOS profile is `treeforge-bootstrap`.
 
 ## Build
 
-`kernelctl` is the supported host interface.
+```sh
+./kernelctl setup
+./kernelctl build --profile treeforge-bootstrap --signing treeforge
+```
 
-    ./kernelctl setup
-    ./kernelctl build \
-        --profile treeforge-bootstrap \
-        --signing treeforge
+Sources and patches are pinned under `profiles/` and `provenance/`. Panthor 1.7 comes from the tracked Linux v7.0 patch series, not a second vendored kernel tree. Builds never flash the device.
 
-Use `./kernelctl --help` for the full command surface.
+Successful builds publish a development provider at `out/development-provider/current`; the five newest successful runs are retained. To promote an already packaged generation without recompiling:
 
-Kernel builds do not flash the device.
-
-## Source
-
-Google kernel source is pinned by the repository source locks. TreeForge changes are applied as tracked profile patches.
-
-`treeforge-bootstrap` is the canonical combined profile for Android and ChromiumOS.
-
-Panthor uses the Linux v7.0 Panthor 1.7 source as a tracked patch series. A second source tree is not vendored. Upstream identity and patch hashes are recorded in `provenance/upstream/linux-v7.0-panthor.json`.
-
-## Providers
-
-A release contains:
-
-    boot.img
-    module-provider.json
-    treeforge-kernel-modules-*.tar.zst
-    treeforge-kernel-panthor-*.tar.zst
-    SHA256SUMS
-
-The Android module provider is one coherent `vendor_kernel_boot`, `vendor_dlkm`, and `system_dlkm` family.
-
-Each kernel generation preserves the matching signed four-module Panthor family. Releases never mix modules across kernel generations.
-
-Kernel module signatures belong to the kernel build. Pixel Partitioner preserves the `.ko` bytes exactly. Owner AVB does not re-sign kernel modules.
-
-Android carrier images are reconstructed from the current device. Non-module content is preserved, the provider module tree is replaced, module metadata is regenerated, and Owner AVB is applied locally.
-
-Proprietary carrier images are not release assets.
+```sh
+./kernelctl build --development-provider-only --generation /absolute/path/to/out/source/<generation>
+```
 
 ## Release
 
-Prepare and verify local assets:
+```sh
+./release prepare
+./release verify
+./release
+```
 
-    ./release
+`prepare` selects a completed `treeforge-bootstrap` generation and stages `boot.img`, `module-provider.json`, the module and Panthor archives, and `SHA256SUMS`. `./release` publishes those verified bytes without rebuilding, requires clean `main` aligned with `origin/main`, and offers to advance the next development version afterward.
 
-Publish those exact prepared assets:
+The module provider is one coherent `vendor_kernel_boot`, `vendor_dlkm`, and `system_dlkm` family. Each generation preserves the matching signed four-module Panthor family; never mix kernel generations.
 
-    ./release publish
+Kernel module signatures belong to the build. Pixel Partitioner preserves `.ko` bytes exactly. Owner AVB does not re-sign kernel modules.
 
-Publish does not rebuild or regenerate release assets. It requires a clean `main` matching `origin/main`.
-
-## Layout
-
-    kernelctl
-        Build and source controller.
-
-    profiles/
-        TreeForge kernel profiles and patches.
-
-    provenance/
-        Source locks and upstream provenance.
-
-    tools/treeforge/release/
-        Release packaging.
-
-    out/
-        Generated output.
-
-    .smoke/
-        Local audits.
-
-## Development provider
-
-Successful kernel builds automatically publish a local development provider at `out/development-provider/current`. Successful runs are retained under `out/development-provider/runs/`, with the newest five kept.
-
-The development provider contains the exact packaged `boot.img`, Android module provider, signed Panthor provider, metadata, and checksums from one completed source generation. Failed builds do not advance `current`.
-
-To promote an already completed packaged generation without rebuilding:
-
-    ./kernelctl build --development-provider-only --generation /absolute/path/to/out/source/<generation>
-
-Development-provider output is local-only and release-ineligible. Production release assets are created separately through the explicit release workflow from an accepted generation.
+Android carrier images come from the device. Non-module content is preserved; module trees and metadata are reconstructed and the image family receives local Owner AVB signing. Proprietary carrier images are not released.
