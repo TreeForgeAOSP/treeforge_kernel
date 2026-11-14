@@ -7,10 +7,169 @@
  * kernel checkout.
  */
 
+#include <linux/atomic.h>
+#include <linux/capability.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/notifier.h>
+#include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
+
+
+/* Boot-lifetime Linux storage-proxy exclusion. This is NOT a secure-world
+ * namespace or proof that firmware has no cached Android storage secrets.
+ * No Android behavior changes until a root caller explicitly arms the guard.
+ */
+#define TFG_USED 1
+#define TFG_ARMED 2
+#define TFG_INVALID 4
+static atomic_t tfg_state = ATOMIC_INIT(0);
+static DEFINE_MUTEX(tfg_lifetime_lock);
+static struct module *tfg_owner;
+static unsigned int tfg_loads, tfg_probes;
+
+static void tfg_mark(unsigned int bits)
+{
+    int old, next;
+
+    do {
+        old = atomic_read(&tfg_state);
+        next = old | bits;
+    } while (atomic_cmpxchg(&tfg_state, old, next) != old);
+}
+
+/* ABI 1: register=0, canonical connect=1, probe=2, transport lost=3.
+ * Connect is atomic-only: callers may hold existing IPC locks. Other calls
+ * are made outside those locks. The full-order cmpxchg is the linearization
+ * point against arm; even failed/disconnected proxy attempts taint the boot.
+ */
+int treeforge_trusty_guard(unsigned int op, const char *port,
+                          struct module *owner);
+int treeforge_trusty_guard(unsigned int op, const char *port,
+                          struct module *owner)
+{
+    int old, result = 0;
+
+    if (op == 1) {
+        if (!port || strcmp(port, "com.android.trusty.storage.proxy"))
+            return 0;
+        do {
+            old = atomic_read(&tfg_state);
+            if (old & TFG_ARMED)
+                return -EACCES;
+        } while (atomic_cmpxchg(&tfg_state, old, old | TFG_USED) != old);
+        return 0;
+    }
+    if (op == 3) {
+        tfg_mark(TFG_INVALID);
+        return 0;
+    }
+    mutex_lock(&tfg_lifetime_lock);
+    if (!owner || strcmp(owner->name, "trusty_ipc") || tfg_loads != 1 ||
+        (atomic_read(&tfg_state) & TFG_INVALID)) {
+        tfg_mark(TFG_INVALID);
+        /* Unarmed Android reloads still work; only readiness is lost. */
+        result = atomic_read(&tfg_state) & TFG_ARMED ? -ESTALE : 0;
+    } else if (op == 0 && !tfg_owner) {
+        tfg_owner = owner;
+    } else if (op == 2 && tfg_owner == owner) {
+        if (++tfg_probes != 1)
+            tfg_mark(TFG_INVALID);
+    } else {
+        tfg_mark(TFG_INVALID);
+        result = -EINVAL;
+    }
+    mutex_unlock(&tfg_lifetime_lock);
+    return result;
+}
+EXPORT_SYMBOL_GPL(treeforge_trusty_guard);
+
+static int tfg_module_event(struct notifier_block *nb,
+                            unsigned long event, void *data)
+{
+    struct module *mod = data;
+    int result = NOTIFY_OK;
+
+    if (strcmp(mod->name, "trusty_ipc"))
+        return NOTIFY_DONE;
+    mutex_lock(&tfg_lifetime_lock);
+    if (event == MODULE_STATE_COMING) {
+        if (++tfg_loads != 1)
+            tfg_mark(TFG_INVALID);
+        if (atomic_read(&tfg_state) & TFG_ARMED)
+            result = notifier_from_errno(-EPERM);
+    } else if (event == MODULE_STATE_GOING) {
+        tfg_mark(TFG_INVALID);
+        if (tfg_owner == mod)
+            tfg_owner = NULL;
+    }
+    mutex_unlock(&tfg_lifetime_lock);
+    return result;
+}
+
+static struct notifier_block tfg_module_notifier = {
+    .notifier_call = tfg_module_event,
+};
+
+static bool tfg_driver_ready(void)
+{
+    /* Caller holds lifetime_lock. No IPC locks or module_mutex acquired here. */
+    return tfg_owner && tfg_owner->state == MODULE_STATE_LIVE &&
+           tfg_loads == 1 && tfg_probes == 1;
+}
+
+static ssize_t trusty_guard_show(struct kobject *kobj,
+                                 struct kobj_attribute *attr, char *buffer)
+{
+    const char *state;
+    int bits;
+    ssize_t result;
+
+    mutex_lock(&tfg_lifetime_lock);
+    bits = atomic_read(&tfg_state);
+    state = bits & TFG_INVALID ? "invalid" : bits & TFG_ARMED ? "armed" :
+            bits & TFG_USED ? "tainted" : "unarmed";
+    result = sysfs_emit(buffer, "TREEFORGE_TRUSTY_GUARD_V1\nabi=1\n"
+                        "state=%s\ndriver=%s\nloads=%u\nprobes=%u\n",
+                        state, tfg_driver_ready() ? "ready" : "unavailable",
+                        tfg_loads, tfg_probes);
+    mutex_unlock(&tfg_lifetime_lock);
+    return result;
+}
+
+static ssize_t trusty_guard_store(struct kobject *kobj,
+                                  struct kobj_attribute *attr,
+                                  const char *buffer, size_t count)
+{
+    int bits, result = 0;
+
+    if (!capable(CAP_SYS_ADMIN))
+        return -EPERM;
+    if (!sysfs_streq(buffer, "arm-v1"))
+        return -EINVAL;
+    mutex_lock(&tfg_lifetime_lock);
+    bits = atomic_read(&tfg_state);
+    if (!tfg_driver_ready() || (bits & (TFG_USED | TFG_INVALID))) {
+        result = -ESTALE;
+    } else if (!(bits & TFG_ARMED)) {
+        /* Nonblocking module reference, no module_mutex acquisition. Held
+         * until reboot: there is intentionally no disarm/reset operation. */
+        if (!try_module_get(tfg_owner)) {
+            result = -ENODEV;
+        } else if (atomic_cmpxchg(&tfg_state, 0, TFG_ARMED) != 0) {
+            module_put(tfg_owner);
+            result = -EBUSY;
+        }
+    }
+    mutex_unlock(&tfg_lifetime_lock);
+    return result ? result : count;
+}
+
+static struct kobj_attribute trusty_guard_attr =
+    __ATTR(trusty_guard, 0600, trusty_guard_show, trusty_guard_store);
 
 static const char treeforge_release[] =
     "@TREEFORGE_RELEASE@";
@@ -54,6 +213,7 @@ TREEFORGE_METADATA_ATTR(drm_backport);
 
 
 static struct attribute *treeforge_metadata_attributes[] = {
+    &trusty_guard_attr.attr,
     &release_attr.attr,
     &linux_base_attr.attr,
     &panthor_attr.attr,
@@ -74,6 +234,10 @@ static struct kobject *treeforge_metadata_kobject;
 static int __init treeforge_metadata_init(void)
 {
     int result;
+
+    result = register_module_notifier(&tfg_module_notifier);
+    if (result)
+        return result;
 
     treeforge_metadata_kobject = kobject_create_and_add(
         "treeforge",

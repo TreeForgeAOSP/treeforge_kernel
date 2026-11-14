@@ -1,0 +1,40 @@
+Subject: [PATCH] drm/sched: guard cleanup timestamp updates in the v7 backport
+
+Panthor supplies unbound submission workqueues, so submission and cleanup
+work can overlap. drm_sched_job_begin() publishes a job to pending_list
+before run_job() returns and its scheduled fence is signaled. Cleanup of
+an older finished job can therefore see an unsignaled next job and write
+the old completion timestamp over the next fence's callback-list union.
+
+job_list_lock protects the pending entry and its fence lifetime, but does
+not serialize that write with dma_fence_signal(). SIGNALED_BIT alone is
+insufficient: the signal path sets it before detaching the callback list.
+Require DMA_FENCE_FLAG_TIMESTAMP_BIT, which is set only after the signal
+path has replaced the callback list with the timestamp and stays set for
+the remaining fence lifetime. A false result safely skips only the timing
+refinement; timeout rearming remains unchanged.
+
+Backport the same guard used by drm_sched_get_finished_job() in the pinned
+Linux v7.0 donor. Keep the existing job-list lock and fence reference
+ownership; add no fence-lock nesting, KMI layout, or submission changes.
+
+Upstream donor: 028ef9c96e96197026887c0f092424679298aae8
+Upstream file: drivers/gpu/drm/scheduler/sched_main.c
+Google base: 3c76c2d71bb32039037c6f5dc38b172fe4142bdb
+---
+diff --git a/drivers/gpu/drm/scheduler/sched_main.c b/drivers/gpu/drm/scheduler/sched_main.c
+--- a/drivers/gpu/drm/scheduler/sched_main.c
++++ b/drivers/gpu/drm/scheduler/sched_main.c
+@@ -1276,8 +1276,10 @@
+ 						typeof(*next), list);
+ 
+ 		if (next) {
+-			next->s_fence->scheduled.timestamp =
+-				dma_fence_timestamp(&job->s_fence->finished);
++			if (test_bit(DMA_FENCE_FLAG_TIMESTAMP_BIT,
++				     &next->s_fence->scheduled.flags))
++				next->s_fence->scheduled.timestamp =
++					dma_fence_timestamp(&job->s_fence->finished);
+ 			/* start TO timer for next job */
+ 			drm_sched_start_timeout(sched);
+ 		}

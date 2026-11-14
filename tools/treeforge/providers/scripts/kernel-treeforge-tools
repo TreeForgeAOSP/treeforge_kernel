@@ -6,6 +6,9 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import subprocess
+import time
 import shutil
 import sys
 import tarfile
@@ -155,6 +158,32 @@ def load_lock() -> dict:
             + ", ".join(missing)
         )
 
+    # Development uses current packaging revisions of the same upstream inputs.
+    repository = data["release_repository"]
+    try:
+        result = subprocess.run(
+            ["gh", "api", "--paginate", "--jq", ".[] | @json", f"repos/{repository}/releases?per_page=100"],
+            text=True, capture_output=True, check=False,
+        )
+        if result.returncode:
+            raise ToolError("unable to check current host-tool releases: " + result.stderr.strip())
+        releases = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    except (OSError, json.JSONDecodeError) as error:
+        raise ToolError("unable to check current host-tool releases: " + str(error)) from error
+    releases = [release for release in releases if not release.get("draft")]
+    for name, record in providers.items():
+        prefix = name + "/" + record["release"].removesuffix("-linux-x86_64") + "-"
+        candidates = [r for r in releases if r.get("tag_name", "").startswith(prefix)
+                      and r["tag_name"][len(prefix):].isdigit()]
+        if not candidates:
+            raise ToolError(f"{name}: no current release for {record['release']}")
+        release = max(candidates, key=lambda r: int(r["tag_name"][len(prefix):]))
+        assets = [a for a in release.get("assets", []) if a.get("name") == record["archive"]]
+        if len(assets) != 1 or not re.fullmatch(r"sha256:[0-9a-f]{64}", assets[0].get("digest") or ""):
+            raise ToolError(f"{name}: current release lacks a verified archive")
+        record.update(release_tag=release["tag_name"], archive_sha256=assets[0]["digest"][7:],
+                      _asset_url=assets[0]["url"])
+        print(f"{name}: current published release {record['release_tag']}")
     return data
 
 
@@ -202,6 +231,7 @@ def provider_lock(
 def provider_manifest(
     provider: str,
     lock_record: dict,
+    *, args: argparse.Namespace, lock: dict,
 ) -> tuple[Path, dict]:
     release = lock_record["release"]
 
@@ -213,7 +243,26 @@ def provider_manifest(
         / "manifest.json"
     )
 
-    data = load_json(path)
+    baseline = load_json(path)
+    archive = acquire_archive(args=args, lock=lock, provider=provider, lock_record=lock_record)
+    with tarfile.open(archive, "r:xz") as bundle:
+        members = [m for m in bundle.getmembers() if m.isfile() and Path(m.name).name == "manifest.json"]
+        consumer = [m for m in members if m.name.endswith("/consumer/manifest.json")]
+        members = consumer or members
+        if len(members) != 1 or members[0].size > 1024 * 1024:
+            raise ToolError(f"{provider}: release must contain one provider manifest")
+        data = json.load(bundle.extractfile(members[0]))
+    if not isinstance(data, dict):
+        raise ToolError(f"{provider}: invalid release manifest")
+    if data.get("provider_sources") != baseline.get("provider_sources"):
+        raise ToolError(f"{provider}: current release changes the pinned upstream sources")
+    for _, relative, expected in iter_hash_records(data):
+        if (not isinstance(relative, str) or not isinstance(expected, str)
+                or Path(relative).is_absolute() or ".." in Path(relative).parts
+                or not re.fullmatch(r"[0-9a-f]{64}", expected)):
+            raise ToolError(f"{provider}: invalid release file record")
+    manifest_relative = "consumer/manifest.json" if consumer else "manifest.json"
+    path = provider_cache_root(cache_root=args.cache_root, provider=provider, lock_record=lock_record) / manifest_relative
 
     if data.get("schema") != 2:
         raise ToolError(
@@ -292,7 +341,7 @@ def provider_cache_root(
     return (
         cache_root.expanduser()
         / provider
-        / lock_record["release"]
+        / lock_record["release_tag"].rsplit("/", 1)[-1]
     )
 
 
@@ -595,15 +644,18 @@ def download_archive(
     print(f"  url: {url}")
 
     try:
-        with urllib.request.urlopen(
-            request,
-            timeout=120,
-        ) as response:
+        if url.startswith("https://api.github.com/"):
             with temporary.open("wb") as stream:
-                shutil.copyfileobj(
-                    response,
-                    stream,
+                result = subprocess.run(
+                    ["gh", "api", "-H", "Accept: application/octet-stream", url + f"?download={time.time_ns()}"],
+                    stdout=stream, stderr=subprocess.PIPE, check=False,
                 )
+            if result.returncode:
+                raise ToolError(result.stderr.decode(errors="replace").strip())
+        else:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                with temporary.open("wb") as stream:
+                    shutil.copyfileobj(response, stream)
 
         verify_archive(
             provider=provider,
@@ -673,6 +725,8 @@ def acquire_archive(
 
     cached_archive = (
         archive_cache
+        / provider
+        / lock_record["release_tag"].rsplit("/", 1)[-1]
         / archive_name
     )
 
@@ -717,7 +771,7 @@ def acquire_archive(
 
     return download_archive(
         provider=provider,
-        url=url,
+        url=lock_record.get("_asset_url", url),
         destination=cached_archive,
         expected=expected,
     )
@@ -901,6 +955,7 @@ def resolve_all(
                 provider_manifest(
                     provider,
                     lock_record,
+                    args=args, lock=lock,
                 )
             )
 
@@ -1017,6 +1072,7 @@ def resolve_all(
         "release_lock": str(
             LOCK_PATH
         ),
+        "resolution": "current-published-releases",
         "source_repository": lock.get(
             "source_repository"
         ),
@@ -1063,6 +1119,7 @@ def command_status(
         _, manifest = provider_manifest(
             provider,
             lock_record,
+            args=args, lock=lock,
         )
 
         state, root = provider_state(

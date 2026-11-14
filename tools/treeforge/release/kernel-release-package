@@ -432,6 +432,20 @@ def main() -> int:
         )
     abi = next(iter(all_abis))
 
+    from kernel_boot_identity import measure
+    boot_identity = measure(generation, boot)
+
+    trusty_guard = None
+    image_path = generation / "raw" / "Image"
+    ipc_modules = locations.get("trusty-ipc.ko", [])
+    if (boot_identity and image_path.is_file()
+            and b"TREEFORGE_TRUSTY_GUARD_V1" in image_path.read_bytes()
+            and ipc_modules and all(b"TREEFORGE_TRUSTY_IPC_GUARD_V1" in p.read_bytes() for p in ipc_modules)):
+        trusty_guard = {"schema": "treeforge.trusty-proxy-guard.v1", "abi": 1,
+                       "activation": "explicit-only", "boot_lifetime": True,
+                       "ipc_modules": [{"path": p.relative_to(provider).as_posix(), "sha256": sha256(p)}
+                                       for p in ipc_modules]}
+
     manifest = {
         "schema": "treeforge.kernel.module-provider.v2",
         "release": version,
@@ -442,6 +456,8 @@ def main() -> int:
         "build_profile": profile,
         "kernel_abi": abi,
         "boot_sha256": sha256(boot),
+        "boot_identity": boot_identity,
+        "trusty_guard": trusty_guard,
         "supported_baseline": baseline["supported_baseline"],
         "module_count": total,
         "reconstruction": {
@@ -608,6 +624,13 @@ def main() -> int:
     pstage = stage / pname
     pstage.mkdir()
 
+    # Preserve the original generation record, including the exact applied patch
+    # hashes. Never infer an old build's source identity from today's checkout.
+    build_provenance = None
+    if build_json.is_file():
+        shutil.copy2(build_json, pstage / "build.json")
+        build_provenance = {"path": "build.json", "sha256": sha256(build_json)}
+
     entries = []
 
     family_signer = None
@@ -727,6 +750,15 @@ def main() -> int:
                     generation
                 ),
                 "kernel_abi": abi,
+                "kernel_contract": {
+                    "repository": "TreeForgeAOSP/treeforge_kernel",
+                    "boot_sha256": manifest["boot_sha256"],
+                    "build_profile": profile,
+                    "kernel_provider_release": manifest["kernel_provider_release"],
+                    "source_commit": build.get("source_commit"),
+                    "source_dirty": build.get("source_dirty"),
+                },
+                "build_provenance": build_provenance,
                 "module_count": len(
                     entries
                 ),

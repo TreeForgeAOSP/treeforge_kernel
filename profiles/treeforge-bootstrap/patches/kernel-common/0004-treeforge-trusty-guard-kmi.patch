@@ -1,0 +1,18 @@
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -123,6 +123,7 @@
+         "android/abi_gki_aarch64_sunxi",
+         "android/abi_gki_aarch64_telechips",
+         "android/abi_gki_aarch64_transsion",
++        "android/abi_gki_aarch64_treeforge",
+         "android/abi_gki_aarch64_tuxera",
+         "android/abi_gki_aarch64_type_visibility",
+         "android/abi_gki_aarch64_unisoc",
+diff --git a/android/abi_gki_aarch64_treeforge b/android/abi_gki_aarch64_treeforge
+new file mode 100644
+--- /dev/null
++++ b/android/abi_gki_aarch64_treeforge
+@@ -0,0 +1,2 @@
++[abi_symbol_list]
++  treeforge_trusty_guard

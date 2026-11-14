@@ -3,7 +3,7 @@
   "device": "tangorpro",
   "id": "treeforge-bootstrap",
   "kernel_release": "android-15.0.0_r0.94",
-  "label": "TreeForge Bootstrap",
+  "label": "TreeForge",
   "treeforge_components": {
     "release": "r0.94-v1.0b1",
     "linux_base": "6.1.99-android14-11",
@@ -16,7 +16,6 @@
       "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
       "patch": "kernel/kernel-common/0001-treeforge-bootstrap-framebuffer.patch",
       "repository": "aosp",
-      "sha256": "44cb664566f2f364e84eedb55a51183861bc3a1d4270541f52838642b2ea2093",
       "provider": "treeforge_bootstrap_framebuffer"
     },
     {
@@ -35,7 +34,6 @@
       "base_revision": "966a2828ccce06078e59e7374c9c68cbe6089004",
       "patch": "kernel/gs201/0001-enable-treeforge-bootstrap-framebuffer.patch",
       "repository": "private/devices/google/gs201",
-      "sha256": "1c9cd8b5e12a7621c68b032acbed011f0ef8b44048c4c68f8ffbe89e871a1d4b",
       "provider": "treeforge_bootstrap_framebuffer"
     },
     {
@@ -70,9 +68,15 @@
     },
     {
       "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-chromiumos/patches/kernel-common/0005-05-drm-sched-timestamp-state-guard.patch",
+      "repository": "aosp",
+      "sha256": "a9ee5242459544acdeda085ff94f8b618ef71bd103ab051efabb08fc4a23938f"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
       "patch": "profiles/treeforge-chromiumos/patches/kernel-common/0006-linux-v7-panthor-1.7.patch",
       "repository": "aosp",
-      "sha256": "e6624c434589e8c7ee4759d0789a2c5cdc627ca15c5c9b0eb33d8565ac87868c"
+      "sha256": "5aa0b7157a91d08c9ae6eb121bf6d2c854800100a492d41bf0edd359814abe99"
     },
     {
       "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
@@ -97,6 +101,18 @@
       "patch": "profiles/treeforge-chromiumos/patches/soc-gs/0001-02-chromiumos-gs201-panthor-v7-clkdev-alias.patch",
       "repository": "private/google-modules/soc/gs",
       "sha256": "dad37f05173c06f3905d238b062c6130dc764787231692919998713b40cccc69"
+    },
+    {
+      "base_revision": "3c76c2d71bb32039037c6f5dc38b172fe4142bdb",
+      "patch": "profiles/treeforge-bootstrap/patches/kernel-common/0004-treeforge-trusty-guard-kmi.patch",
+      "repository": "aosp",
+      "sha256": "65feb6bbf5df58aa46dfb58c479c343c4ce163aba3e136053949e801ab0465d0"
+    },
+    {
+      "base_revision": "49b22cf8be519c81936b86d64416e0839a4e831f",
+      "patch": "profiles/treeforge-bootstrap/patches/trusty/0001-treeforge-storage-proxy-guard.patch",
+      "repository": "private/google-modules/trusty",
+      "sha256": "f747a9cdc434f7aa11ec070467362ce15b5bb73d3727dd0b877573780978014f"
     }
   ],
   "schema": 1,

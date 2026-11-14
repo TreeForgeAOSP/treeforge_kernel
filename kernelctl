@@ -91,23 +91,18 @@ FRAMEBUFFER_PROVIDER_NAME = (
     "treeforge_bootstrap_framebuffer"
 )
 
-FRAMEBUFFER_PROVIDER_VERSION = "v1.0b1"
+FRAMEBUFFER_PROVIDER_VERSION = None
 FRAMEBUFFER_PROVIDER_ABI = 1
 FRAMEBUFFER_PROVIDER_ENV = (
     "TREEFORGE_BOOTSTRAP_FRAMEBUFFER_PROVIDER"
 )
 FRAMEBUFFER_PROVIDER_REPOSITORY = (
-    "TreeForgeDEV/treeforge_bootstrap_framebuffer"
+    "TreeForgeAOSP/treeforge_bootstrap_framebuffer"
 )
-FRAMEBUFFER_PROVIDER_RELEASE_ASSET = (
-    "treeforge-bootstrap-framebuffer-v1.0b1-provider.tar.xz"
-)
-FRAMEBUFFER_PROVIDER_RELEASE_SHA256 = (
-    "1ac64371bb52dc0c6be869a5d6f517619da8e36f16d4549825cde47ae9f08f82"
-)
-FRAMEBUFFER_PROVIDER_MANIFEST_SHA256 = (
-    "104f3df33d4de8236c04d7edea7b87a68eb852d5a5bb3908c96052b5d12e8197"
-)
+FRAMEBUFFER_PROVIDER_RELEASE_ASSET = None
+FRAMEBUFFER_PROVIDER_RELEASE_SHA256 = None
+FRAMEBUFFER_PROVIDER_MANIFEST_SHA256 = None
+_FRAMEBUFFER_RELEASE_ASSET_URL = None
 FRAMEBUFFER_PROVIDER_CACHE_ROOT = (
     Path.home()
     / ".cache"
@@ -115,10 +110,7 @@ FRAMEBUFFER_PROVIDER_CACHE_ROOT = (
     / "providers"
     / FRAMEBUFFER_PROVIDER_NAME
 )
-FRAMEBUFFER_PROVIDER_CACHE = (
-    FRAMEBUFFER_PROVIDER_CACHE_ROOT
-    / FRAMEBUFFER_PROVIDER_VERSION
-)
+FRAMEBUFFER_PROVIDER_CACHE = None
 
 
 class KernelCtlError(RuntimeError):
@@ -128,7 +120,6 @@ class KernelCtlError(RuntimeError):
 BUILD_PROFILE_ORDER = (
     "source",
     "treeforge-bootstrap",
-    "treeforge-chromiumos",
 )
 
 
@@ -140,18 +131,13 @@ BUILD_PROFILES = {
         ),
     },
     "treeforge-bootstrap": {
-        "label": "TreeForge Bootstrap",
+        "label": "TreeForge",
         "description": (
-            "Source + TreeForge Bootstrap framebuffer bridge"
+            "Source + Bootstrap framebuffer and ChromiumOS/Panthor support"
         ),
     },
 
-    "treeforge-chromiumos": {
-        "label": "TreeForge ChromiumOS",
-        "description": (
-            "TreeForge Bootstrap + ChromiumOS compatibility"
-        ),
-    },
+
 
 }
 
@@ -1639,6 +1625,8 @@ def file_sha256(path: Path) -> str:
 
 def load_build_profile(
     profile: str,
+    *,
+    pkvm_protected: bool = False,
 ) -> dict:
     path = build_profile_path(
         profile
@@ -1706,6 +1694,20 @@ def load_build_profile(
         treeforge_kernel_components(
             data
         )
+
+    if pkvm_protected:
+        # The pinned GKI config already requests protected mode. Keep the
+        # disable patch in the canonical recipe for fallback and normalization.
+        disable_patch = (
+            "profiles/treeforge-bootstrap/patches/kernel-common/"
+            "0003-disable-pkvm-for-bootstrap.patch"
+        )
+        patches = data["patches"]
+        selected = [record for record in patches if record["patch"] != disable_patch]
+        if len(selected) != len(patches) - 1:
+            raise KernelCtlError("expected one TreeForge patch that disables pKVM")
+        data["patches"] = selected
+        data["_requested_pkvm_mode"] = "protected"
 
     return data
 
@@ -1821,15 +1823,15 @@ def _framebuffer_github_request(
 def _framebuffer_release_asset_api_url(
     token: str,
 ) -> str:
-    encoded_tag = urllib.parse.quote(
-        FRAMEBUFFER_PROVIDER_VERSION,
-        safe="",
-    )
+    global FRAMEBUFFER_PROVIDER_VERSION, FRAMEBUFFER_PROVIDER_RELEASE_ASSET
+    global FRAMEBUFFER_PROVIDER_RELEASE_SHA256, FRAMEBUFFER_PROVIDER_MANIFEST_SHA256
+    global FRAMEBUFFER_PROVIDER_CACHE, _FRAMEBUFFER_RELEASE_ASSET_URL
+    if _FRAMEBUFFER_RELEASE_ASSET_URL is not None:
+        return _FRAMEBUFFER_RELEASE_ASSET_URL
     release_url = (
         "https://api.github.com/repos/"
         + FRAMEBUFFER_PROVIDER_REPOSITORY
-        + "/releases/tags/"
-        + encoded_tag
+        + "/releases?per_page=100"
     )
 
     try:
@@ -1841,7 +1843,12 @@ def _framebuffer_release_asset_api_url(
             ),
             timeout=60,
         ) as response:
-            release = json.load(response)
+            releases = json.load(response)
+            releases = [item for item in releases if not item.get("draft")
+                        and re.fullmatch(r"v1\.0b[0-9]+", item.get("tag_name", ""))]
+            if not releases:
+                raise KernelCtlError("no compatible published framebuffer release")
+            release = max(releases, key=lambda item: int(item["tag_name"].split("b")[-1]))
     except (
         OSError,
         urllib.error.URLError,
@@ -1852,20 +1859,28 @@ def _framebuffer_release_asset_api_url(
             "framebuffer provider"
         ) from error
 
-    for asset in release.get("assets", []):
-        if asset.get("name") != FRAMEBUFFER_PROVIDER_RELEASE_ASSET:
-            continue
-
-        url = asset.get("url")
-
-        if isinstance(url, str) and url:
-            return url
-
-    raise KernelCtlError(
-        "released TreeForge framebuffer provider asset "
-        "is missing: "
-        + FRAMEBUFFER_PROVIDER_RELEASE_ASSET
-    )
+    version = release.get("tag_name", "")
+    if not re.fullmatch(r"v1\.0b[0-9]+", version) or release.get("draft"):
+        raise KernelCtlError("current framebuffer release is incompatible")
+    archive_name = f"treeforge-bootstrap-framebuffer-{version}-provider.tar.xz"
+    assets = {asset["name"]: asset for asset in release.get("assets", [])}
+    try:
+        archive = assets[archive_name]
+        archive_sha = archive["digest"].removeprefix("sha256:")
+        manifest_sha = assets["provider.json"]["digest"].removeprefix("sha256:")
+        asset_url = archive["url"]
+    except (KeyError, AttributeError) as error:
+        raise KernelCtlError("current framebuffer release lacks verified assets") from error
+    if not all(re.fullmatch(r"[0-9a-f]{64}", value) for value in (archive_sha, manifest_sha)):
+        raise KernelCtlError("current framebuffer release has invalid checksums")
+    FRAMEBUFFER_PROVIDER_VERSION = version
+    FRAMEBUFFER_PROVIDER_RELEASE_ASSET = archive_name
+    FRAMEBUFFER_PROVIDER_RELEASE_SHA256 = archive_sha
+    FRAMEBUFFER_PROVIDER_MANIFEST_SHA256 = manifest_sha
+    FRAMEBUFFER_PROVIDER_CACHE = FRAMEBUFFER_PROVIDER_CACHE_ROOT / version
+    _FRAMEBUFFER_RELEASE_ASSET_URL = asset_url
+    print(f"Framebuffer provider: current published release {version}")
+    return asset_url
 
 
 def _download_framebuffer_provider_archive(
@@ -2085,6 +2100,10 @@ def _materialize_framebuffer_provider() -> Path:
 
 
 def framebuffer_provider_root() -> Path:
+    token = _framebuffer_github_token()
+    if token is None:
+        raise KernelCtlError("Authenticate with gh auth login to check the current framebuffer release")
+    _framebuffer_release_asset_api_url(token)
     explicit = os.environ.get(
         FRAMEBUFFER_PROVIDER_ENV
     )
@@ -2125,6 +2144,9 @@ def framebuffer_provider_root() -> Path:
             f"  expected={FRAMEBUFFER_PROVIDER_VERSION}\n"
             f"  actual={data.get('version')}"
         )
+
+    if data.get("device") != DEVICE:
+        raise KernelCtlError("framebuffer provider device mismatch")
 
     if data.get("abi") != FRAMEBUFFER_PROVIDER_ABI:
         raise KernelCtlError(
@@ -2209,20 +2231,8 @@ def validate_profile_patch_records(
             "sha256"
         )
 
-        if not all(
-            isinstance(value, str)
-            and value
-            for value in (
-                repository,
-                base_revision,
-                patch_value,
-                expected_sha256,
-            )
-        ):
-            raise KernelCtlError(
-                "incomplete kernel profile "
-                "patch record"
-            )
+        if not all(isinstance(value, str) and value for value in (repository, base_revision, patch_value)):
+            raise KernelCtlError("incomplete kernel profile patch record")
 
         provider_name = record.get(
             "provider"
@@ -2242,10 +2252,7 @@ def validate_profile_patch_records(
                 )
             )
 
-            for field in (
-                "sha256",
-                "base_revision",
-            ):
+            for field in ("base_revision",):
                 if (
                     provider_record.get(field)
                     != record.get(field)
@@ -2255,6 +2262,7 @@ def validate_profile_patch_records(
                         f"mismatch for {patch_value}: {field}"
                     )
 
+            expected_sha256 = provider_record.get("sha256")
             patch = (
                 provider_root
                 / patch_value
@@ -2263,6 +2271,21 @@ def validate_profile_patch_records(
             raise KernelCtlError(
                 "unsupported kernel patch provider: "
                 + str(provider_name)
+            )
+
+        if not all(
+            isinstance(value, str)
+            and value
+            for value in (
+                repository,
+                base_revision,
+                patch_value,
+                expected_sha256,
+            )
+        ):
+            raise KernelCtlError(
+                "incomplete kernel profile "
+                "patch record"
             )
 
         need_file(patch)
@@ -2288,6 +2311,7 @@ def validate_profile_patch_records(
         validated.append(
             {
                 **record,
+                "sha256": expected_sha256,
                 "_patch_path":
                     patch,
                 "_repository_root":
@@ -3283,9 +3307,11 @@ def apply_selected_profile_patches(
 
 def prepare_build_profile_source(
     profile: str,
+    *,
+    pkvm_protected: bool = False,
 ) -> dict:
     profile_data = load_build_profile(
-        profile
+        profile, pkvm_protected=pkvm_protected
     )
 
     source_lock = (
@@ -3328,9 +3354,11 @@ def prepare_build_profile_source(
 
 def print_build_profile_recipe_plan(
     profile: str,
+    *,
+    pkvm_protected: bool = False,
 ) -> None:
     data = load_build_profile(
-        profile
+        profile, pkvm_protected=pkvm_protected
     )
 
     source_lock = (
@@ -3381,12 +3409,9 @@ def print_build_profile_recipe_plan(
 
 def annotate_build_metadata_profile(
     metadata: Path,
-    profile: str,
+    data: dict,
 ) -> None:
-    data = load_build_profile(
-        profile
-    )
-
+    profile = data["id"]
     patches = (
         validate_profile_patch_records(
             data
@@ -3457,11 +3482,22 @@ def annotate_build_metadata_profile(
         for record in patches
     ]
 
+    if profile == "treeforge-bootstrap":
+        payload["framebuffer_provider"] = {
+            "repository": FRAMEBUFFER_PROVIDER_REPOSITORY,
+            "release": FRAMEBUFFER_PROVIDER_VERSION,
+            "archive_sha256": FRAMEBUFFER_PROVIDER_RELEASE_SHA256,
+            "manifest_sha256": FRAMEBUFFER_PROVIDER_MANIFEST_SHA256,
+        }
+
     payload["treeforge_components"] = (
         treeforge_kernel_components(
             data
         )
     )
+
+    if "_requested_pkvm_mode" in data:
+        payload["requested_pkvm_mode"] = data["_requested_pkvm_mode"]
 
     metadata.write_text(
         json.dumps(
@@ -3914,6 +3950,11 @@ def write_build_metadata(
         "schema": 1,
         "device": DEVICE,
         "kernel_provider_release": KERNEL_PROVIDER_RELEASE,
+        "source_commit": git_head(ROOT),
+        "source_dirty": bool(subprocess.check_output(
+            ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all"],
+            text=True,
+        ).strip()),
         "workspace": str(ROOT),
         "generation": str(generation),
         "raw": str(raw),
@@ -3926,6 +3967,7 @@ def write_build_metadata(
         "treeforge_tools_contract": str(
             TREEFORGE_TOOLS_CONTRACT
         ),
+        "treeforge_tools_providers": contract["tools"],
         "treeforge_tools": {
             name: record.get("path")
             for name, record in contract["tools"].items()
@@ -5213,9 +5255,11 @@ def package_kernel_development_provider(
 def execute_kernel_build(
     signing: str,
     profile: str,
+    *,
+    pkvm_protected: bool = False,
 ) -> int:
     profile_data = prepare_build_profile_source(
-        profile
+        profile, pkvm_protected=pkvm_protected
     )
 
     print("TreeForge Kernel Build")
@@ -5241,7 +5285,7 @@ def execute_kernel_build(
 
     annotate_build_metadata_profile(
         metadata,
-        profile,
+        profile_data,
     )
 
     print()
@@ -5416,7 +5460,18 @@ def build_command(argv) -> int:
         ),
     )
 
+    parser.add_argument(
+        "--pkvm-protected",
+        action="store_true",
+        help="build the TreeForge candidate using the pinned protected KVM mode",
+    )
+
     args = parser.parse_args(argv)
+
+    if args.pkvm_protected and (
+        args.profile == "source" or args.package_only or args.development_provider_only
+    ):
+        parser.error("--pkvm-protected requires a TreeForge build or build plan")
 
     if (
         args.generation is not None
@@ -5457,16 +5512,15 @@ def build_command(argv) -> int:
 
         return 0
 
-    profile = resolve_build_profile(
-        args.profile
-    )
+    requested_profile = "treeforge-bootstrap" if args.pkvm_protected else args.profile
+    profile = resolve_build_profile(requested_profile)
 
-    print_build_profile(
-        profile
-    )
+    print_build_profile(profile)
+    if args.pkvm_protected:
+        print("Requested pKVM mode: protected (candidate)")
 
     if args.plan_only:
-        print_build_profile_recipe_plan(profile)
+        print_build_profile_recipe_plan(profile, pkvm_protected=args.pkvm_protected)
         kernel_build_plan()
         print_build_signing_plan(args.signing)
 
@@ -5511,6 +5565,7 @@ def build_command(argv) -> int:
     return execute_kernel_build(
         args.signing,
         profile,
+        pkvm_protected=args.pkvm_protected,
     )
 
 

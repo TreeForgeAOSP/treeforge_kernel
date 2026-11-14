@@ -18,8 +18,12 @@
       "sha256": "ccde8ab9d697072c734fdb7c8e7ca92c40af2f343471eddfb568479b342825e8"
     },
     {
+      "path": "profiles/treeforge-chromiumos/patches/kernel-common/0005-05-drm-sched-timestamp-state-guard.patch",
+      "sha256": "a9ee5242459544acdeda085ff94f8b618ef71bd103ab051efabb08fc4a23938f"
+    },
+    {
       "path": "profiles/treeforge-chromiumos/patches/kernel-common/0006-linux-v7-panthor-1.7.patch",
-      "sha256": "e6624c434589e8c7ee4759d0789a2c5cdc627ca15c5c9b0eb33d8565ac87868c"
+      "sha256": "5aa0b7157a91d08c9ae6eb121bf6d2c854800100a492d41bf0edd359814abe99"
     },
     {
       "path": "profiles/treeforge-chromiumos/patches/kernel-common/0007-01-linux-v7-drm-panthor-kconfig.patch",

@@ -1,0 +1,72 @@
+diff --git a/drivers/trusty/trusty-ipc.c b/drivers/trusty/trusty-ipc.c
+--- a/drivers/trusty/trusty-ipc.c
++++ b/drivers/trusty/trusty-ipc.c
+@@ -3,6 +3,7 @@
+  * Copyright (C) 2020 Google, Inc.
+  */
+ 
++#include "treeforge-trusty-guard.h"
+ #include <linux/aio.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+@@ -830,6 +831,13 @@
+ 	strncpy(body->name, name, sizeof(body->name));
+ 	body->name[sizeof(body->name)-1] = '\0';
+ 
++	/* Check exactly the canonical bytes sent on wire, for every caller/device. */
++	err = treeforge_trusty_guard(1, body->name, THIS_MODULE);
++	if (err) {
++		tipc_chan_put_txbuf(chan, txbuf);
++		return err;
++	}
++
+ 	mutex_lock(&chan->lock);
+ 	switch (chan->state) {
+ 	case TIPC_DISCONNECTED:
+@@ -1817,6 +1825,7 @@
+ 	}
+ 	vds->state = VDS_OFFLINE;
+ 	mutex_unlock(&vds->lock);
++	treeforge_trusty_guard(3, NULL, THIS_MODULE);
+ 
+ 	/* wakeup all waiters */
+ 	wake_up_interruptible_all(&vds->sendq);
+@@ -2205,6 +2214,7 @@
+ 	vdev->priv = vds;
+ 	vds->state = VDS_OFFLINE;
+ 
++	treeforge_trusty_guard(2, NULL, THIS_MODULE);
+ 	dev_dbg(&vdev->dev, "%s: done\n", __func__);
+ 	return 0;
+ 
+@@ -2219,6 +2229,7 @@
+ {
+ 	struct tipc_virtio_dev *vds = vdev->priv;
+ 
++	treeforge_trusty_guard(3, NULL, THIS_MODULE);
+ 	_go_offline(vds);
+ 
+ 	mutex_lock(&vds->lock);
+@@ -2265,6 +2276,11 @@
+ 	int ret;
+ 	dev_t dev;
+ 
++	ret = treeforge_trusty_guard(0, NULL, THIS_MODULE);
++	if (ret)
++		return ret;
++	pr_info("TREEFORGE_TRUSTY_IPC_GUARD_V1\n");
++
+ 	ret = alloc_chrdev_region(&dev, 0, MAX_DEVICES, KBUILD_MODNAME);
+ 	if (ret) {
+ 		pr_err("%s: alloc_chrdev_region failed: %d\n", __func__, ret);
+diff --git a/drivers/trusty/treeforge-trusty-guard.h b/drivers/trusty/treeforge-trusty-guard.h
+new file mode 100644
+--- /dev/null
++++ b/drivers/trusty/treeforge-trusty-guard.h
+@@ -0,0 +1,6 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef TREEFORGE_TRUSTY_GUARD_H
++#define TREEFORGE_TRUSTY_GUARD_H
++struct module;
++int treeforge_trusty_guard(unsigned int op, const char *port, struct module *owner);
++#endif

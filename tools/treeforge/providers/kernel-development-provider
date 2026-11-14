@@ -194,6 +194,62 @@ def verify_provider(root: Path) -> dict:
     return manifest
 
 
+def chromiumos_report(provider: Path, previous: Path | None) -> dict:
+    """Describe the existing GPU export without consulting a consumer checkout."""
+    archive, = provider.glob("treeforge-kernel-panthor-*.tar.zst")
+    member = archive.name.removesuffix(".tar.zst") + "/manifest.json"
+    family = json.loads(subprocess.check_output(
+        ["tar", "-xOf", str(archive), member], text=True,
+    ))
+    modules = {entry["name"]: entry["sha256"] for entry in family["modules"]}
+    identity = {"kernel_abi": family["kernel_abi"],
+                "module_sig_key": family["module_sig_key"], "modules": modules}
+    changed = None
+    if previous is not None and previous.is_dir():
+        old = chromiumos_report(previous, None)
+        changed = any(identity[key] != old[key] for key in identity)
+    module_provider = json.loads((provider / "module-provider.json").read_text())
+    provider_identity = sha256(provider / "module-provider.json")
+    contract_changed = (None if previous is None or not previous.is_dir() else
+                        provider_identity != old["kernel_provider_sha256"])
+    wifi_archive, = provider.glob("treeforge-kernel-modules-tangorpro-android15-*.tar.zst")
+    wifi_modules = {Path(entry["path"]).name: entry["sha256"]
+                    for carrier in module_provider["carriers"].values() for entry in carrier["modules"]
+                    if Path(entry["path"]).name in ("rfkill.ko", "cfg80211.ko", "synadhd.ko")}
+    if set(wifi_modules) != {"rfkill.ko", "cfg80211.ko", "synadhd.ko"}:
+        raise DevelopmentProviderError("incomplete ChromiumOS Wi-Fi module subset")
+    wifi_changed = None if previous is None or not previous.is_dir() else wifi_modules != old["wifi"]["modules"]
+    return {
+        "schema": "treeforge.kernel.chromiumos-update.v1",
+        "kernel_provider_sha256": provider_identity,
+        "kernel_contract_changed_since_previous": contract_changed,
+        **identity,
+        "archive": archive.name,
+        "sha256": sha256(archive),
+        "boot_sha256": module_provider["boot_sha256"],
+        "changed_since_previous": changed,
+        "wifi": {"archive": wifi_archive.name, "sha256": sha256(wifi_archive),
+                 "modules": wifi_modules, "changed_since_previous": wifi_changed},
+        "previous_run": previous.name if previous is not None else None,
+    }
+
+
+def print_chromiumos_notice(report: dict, provider: Path) -> None:
+    changed = report["changed_since_previous"]
+    print("CHROMIUMOS_GPU_MODULES=" + (
+        "CHANGED" if changed is True else "UNCHANGED" if changed is False else "NO_PREVIOUS_EXPORT"
+    ))
+    wifi_changed = report["wifi"]["changed_since_previous"]
+    print("CHROMIUMOS_WIFI_MODULES=" + (
+        "CHANGED" if wifi_changed is True else "UNCHANGED" if wifi_changed is False else "NO_PREVIOUS_EXPORT"
+    ))
+    contract_changed = report["kernel_contract_changed_since_previous"]
+    print("CHROMIUMOS_KERNEL_CONTRACT=" + ("CHANGED" if contract_changed is True else "UNCHANGED" if contract_changed is False else "NO_PREVIOUS_EXPORT"))
+    if changed is not False or wifi_changed is not False or contract_changed is not False:
+        print("Update and rebuild ChromiumOS when using this kernel; import the changed modules/provider identity at its next build. Metadata-only repackaging changes provenance even when module bytes match.")
+    print(f"CHROMIUMOS_KERNEL_REPORT={provider / 'development-provider.json'}")
+
+
 def update_current(
     development_root: Path,
     run: Path,
@@ -357,6 +413,13 @@ def package(
     )
 
     run_id = generation.name
+    original_run = runs_root / run_id
+    if original_run.is_dir() and (generation / "raw/vmlinux").is_file():
+        previous_metadata = json.loads((original_run / "module-provider.json").read_text())
+        if previous_metadata.get("boot_identity") is None:
+            # Add measurements by packaging the same completed generation into
+            # a new immutable run. Do not edit a saved provider or recompile.
+            run_id += "-kernel-proof-v1"
 
     staged = (
         incoming_root
@@ -382,6 +445,9 @@ def package(
         parents=True,
         exist_ok=True,
     )
+
+    current = development_root / "current"
+    previous = current.resolve() if current.is_dir() else None
 
     if final.is_dir():
         verify_provider(
@@ -416,6 +482,7 @@ def package(
             "DEVELOPMENT_PROVIDER=PASS"
         )
 
+        print_chromiumos_notice(chromiumos_report(final, previous), final)
         return final
 
     if staged.exists():
@@ -552,6 +619,8 @@ def package(
             ),
         }
 
+        manifest["chromiumos"] = chromiumos_report(staged, previous)
+
         (
             staged
             / "development-provider.json"
@@ -615,6 +684,7 @@ def package(
         "DEVELOPMENT_PROVIDER=PASS"
     )
 
+    print_chromiumos_notice(manifest["chromiumos"], final)
     return final
 
 

@@ -1848,10 +1848,10 @@ index 0000000000000000000000000000000000000000..070415c8f9761b36867175b53a1687d2
 +#endif
 diff --git a/drivers/gpu/drm/panthor/panthor_drv.c b/drivers/gpu/drm/panthor/panthor_drv.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..ea47e7fd70022a290308c38a2acd190f5f48ce1d
+index 0000000000000000000000000000000000000000..d47594801c8fc8b8d35dd82192abd9a953cc8863
 --- /dev/null
 +++ b/drivers/gpu/drm/panthor/panthor_drv.c
-@@ -0,0 +1,1849 @@
+@@ -0,0 +1,1852 @@
 +// SPDX-License-Identifier: GPL-2.0 or MIT
 +/* Copyright 2018 Marty E. Plummer <hanetzer@startmail.com> */
 +/* Copyright 2019 Linaro, Ltd., Rob Herring <robh@kernel.org> */
@@ -3549,8 +3549,11 @@ index 0000000000000000000000000000000000000000..ea47e7fd70022a290308c38a2acd190f
 +	.minor = 7,
 +
 +	.gem_create_object = panthor_gem_create_object,
++	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
++	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
 +	.gem_prime_import_sg_table = drm_gem_shmem_prime_import_sg_table,
 +	.gem_prime_import = panthor_gem_prime_import,
++	.gem_prime_mmap = drm_gem_prime_mmap,
 +#ifdef CONFIG_DEBUG_FS
 +	.debugfs_init = panthor_debugfs_init,
 +#endif
