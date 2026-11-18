@@ -1,5 +1,20 @@
 # TreeForge Kernel — feature roadmap
 
+## Post-reset availability — November 17, 17:00 EST review
+
+- [x] VERIFIED / CHECKOUT RESTORED — The post-reset checkout is on `main` (`7f732a5`), not the historical work branch named below. Recovered roadmap edits and the untracked Tangorpro panel-orientation patch are present and preserved. Their presence does not activate the patch or establish a new build.
+- [ ] EVIDENCE AVAILABILITY — `out/` and `.smoke/` are absent on this reset host. Kernel owns recovery/verification of exact build metadata and provider inputs before any separately authorized protected-mode qualification. Preserve the ordinary-mode fallback and Android/Menu/ChromiumOS gates; historical source-publication claims are not current hardware acceptance.
+
+Evidence: read-only local branch/path inspection and the [recovery audit](https://chatgpt.com/c/6afcc7b4-c74c-83e9-af0f-65c30bfcb6ab?messageId=a679d868-ebf4-4803-90ab-c6e0934c9003). This review changes roadmap text only; existing source and documentation edits are preserved. No builds, fetches, commits, pushes or device operations.
+
+## Source-publication clarification — November 17, 12:00 EST review
+
+- [x] RECORDED / PROTECTED-MODE SOURCE INCLUDED — Commit `5736cd2ac2f3a6ad8dfcb22accd6c37fca744193` contains the opt-in `./kernelctl build --pkvm-protected` candidate. Local `main`, `origin/main` and tag `r0.94-v1.0b2` contain that commit; the Other OS project reports GitHub publication. This review checked local history/refs, not the live remote. The option was not lost during stash restoration.
+- [x] RECORDED / ARCHIVAL CHECKPOINT — Current local branch `work/reconstruction-otheros-20261117` is at `5edac33dfdf064cdce1ec814256bbecd6c5414e1`, matching its local remote-tracking ref. This checkpoint archives the inactive Tangorpro panel-orientation patch; it does not activate it in the build recipe.
+- [ ] UNCHANGED / RUNTIME QUALIFICATION — Published source support is not protected-mode runtime acceptance. The project reports released-kernel build metadata still includes the forced-`none` patch; ordinary builds retain that fallback. Protected-mode building, installation and effective-protection qualification remain deferred under the existing gates below.
+
+Evidence: local commit/containment/ref inspection; **Investigate ChromeOS boot crash**, native thread `01a1a76f-b0bf-76c1-bfa7-bae30542f3aa`, clarification turn `01a1ea6c-8fbc-7671-868c-4af73d8161e1` and source-checkpoint turn `01a1ea6f-6bb3-78b0-bb45-5540a0a51a43`. No source patches, builds, device operations, commits or pushes were performed by this review.
+
 ## Current direction: November 11, 17:00 UTC review
 
 - [x] DECIDED / RETAIN PIVOT_ROOT — The user retained the same-kernel `pivot_root` handoff rather than switch to `kexec`. Shared-kernel changes still require Android, Boot Manager and ChromiumOS qualification. The source-only protected-mode option and regular `mode=none` fallback remain distinct from accepted runtime evidence.

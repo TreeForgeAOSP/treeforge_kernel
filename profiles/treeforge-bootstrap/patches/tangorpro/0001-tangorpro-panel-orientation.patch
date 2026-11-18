@@ -1,0 +1,11 @@
+--- a/dts/gs201-tangorpro-display-common.dtsi
++++ b/dts/gs201-tangorpro-display-common.dtsi
+@@ -7,7 +7,7 @@
+  */
+ 
+ /* 0: normal, 1: bottom up, 2: left up, 3: right up */
+-orientation = <0>;
++orientation = <2>;
+ 
+ /* i2c power supply */
+ i2c-pwr-supply = <&m_ldo25_reg>;
